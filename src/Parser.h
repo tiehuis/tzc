@@ -4,6 +4,8 @@
 
 //#define TRACE
 
+#define LOOP_MAX 10000
+
 typedef struct Node Node;
 
 typedef struct {
@@ -133,6 +135,7 @@ typedef enum BinOp {
     binop_sub,
     binop_sub_wrap,
     binop_sub_saturate,
+    binop_array_spread,
     binop_array_concat,
     binop_mul,
     binop_mul_wrap,
@@ -177,6 +180,7 @@ typedef enum {
     node_primary_type_anyframe,
     node_primary_type_unreachable,
     node_primary_type_string_literal,
+    node_primary_type_anytype,
 } NodePrimaryTypeTag;
 
 const char* NodePrimaryTypeTag_name(NodePrimaryTypeTag tag)
@@ -214,6 +218,8 @@ const char* NodePrimaryTypeTag_name(NodePrimaryTypeTag tag)
             return "node_primary_type_unreachable";
         case node_primary_type_string_literal:
             return "node_primary_type_string_literal";
+        case node_primary_type_anytype:
+            return "node_primary_type_anytype";
     }
 }
 
@@ -457,6 +463,12 @@ typedef struct {
 } NodeDataPayload;
 
 typedef struct {
+    Buffer name;
+    bool is_pointer;
+    Buffer name_index;
+} NodeDataPayloadIndex;
+
+typedef struct {
     Node **payloads;
     uint32_t payloads_len;
 } NodeDataPayloadList;
@@ -621,6 +633,7 @@ typedef union NodeData {
     NodeDataWhilePrefix while_prefix;
     NodeDataIfPrefix if_prefix;
     NodeDataPayload payload;
+    NodeDataPayloadIndex payload_index;
     NodeDataPayloadList payload_list;
     NodeDataSwitchProng switch_prong;
     NodeDataForTypeExpr for_type_expr;
@@ -716,6 +729,7 @@ typedef enum NodeTag {
     node_while_prefix,
     node_if_prefix,
     node_payload,
+    node_payload_index,
     node_payload_list,
     node_switch_prong,
     node_for_type_expr,
@@ -735,6 +749,7 @@ typedef enum NodeTag {
     node_asm_input,
     node_asm_output,
     node_asm_expr,
+    node_invalid,
 } NodeTag;
 
 __attribute__((unused))
@@ -889,6 +904,8 @@ static const char* NodeTag_name(NodeTag tag)
             return "node_if_prefix";
         case node_payload:
             return "node_payload";
+        case node_payload_index:
+            return "node_payload_index";
         case node_payload_list:
             return "node_payload_list";
         case node_switch_prong:
@@ -927,6 +944,8 @@ static const char* NodeTag_name(NodeTag tag)
             return "node_asm_output";
         case node_asm_expr:
             return "node_asm_expr";
+        case node_invalid:
+            return "node_invalid";
     }
 }
 
@@ -954,10 +973,10 @@ static void Parser_init(Parser *p, Buffer source, Token *tokens, uint32_t tokens
     p->index = 0;
 }
 
-#define Parser_fail(p_, ...) Parser_fail0(p_, "parse error: " __VA_ARGS__)
-static void _Noreturn Parser_fail0(Parser *p, const char *fmt, ...)
+#define Parser_fail(p_, ...) Parser_fail0(p_, __LINE__, "parse error: " __VA_ARGS__)
+static void _Noreturn Parser_fail0(Parser *p, int line_no, const char *fmt, ...)
 {
-    std_printf("%d:", p->index);
+    std_printf("%d:", line_no);
 
     va_list args;
     va_start(args, fmt);
@@ -982,12 +1001,6 @@ static void _Noreturn Parser_fail0(Parser *p, const char *fmt, ...)
     std_printf("^\n");
 
     std_exit(1);
-}
-
-#define Parser_unimplemented() Parser_unimplemented0(__func__)
-static void _Noreturn Parser_unimplemented0(const char *function)
-{
-    std_panic("%s: unimplemented\n", function);
 }
 
 static bool Parser_peek(Parser *p, TokenTag tag)
@@ -1020,11 +1033,11 @@ static void Parser_dump0(Parser *p, const char *function)
     std_printf("%d:%s:%s:%s\n", p->index, function, TokenTag_name(t.tag), Buffer_staticZ(token));
 }
 
-#define Parser_expect(p, tag) Parser_expect0(p, __func__, tag)
-static void Parser_expect0(Parser *p, const char *function, TokenTag tag)
+#define Parser_expect(p, tag) Parser_expect0(p, __LINE__, __func__, tag)
+static void Parser_expect0(Parser *p, int line_no, const char *function, TokenTag tag)
 {
     Token found = p->tokens[p->index];
-    if (!Parser_eat(p, tag)) Parser_fail(p, "%s: expected tag %s found %s\n", function, TokenTag_name(tag), TokenTag_name(found.tag));
+    if (!Parser_eat(p, tag)) Parser_fail0(p, line_no, "%s: expected tag %s found %s\n", function, TokenTag_name(tag), TokenTag_name(found.tag));
 }
 
 static TokenTag Parser_eatOneOf(Parser *p, TokenTag *tags, size_t tags_len)
@@ -1056,9 +1069,17 @@ static Buffer Parser_expectIdentifier0(Parser *p, const char *function)
     return b;
 }
 
-static Node* Parser_allocNode(Parser *p)
+#define Parser_allocNode(p) Parser_allocNode0(p, __func__, __LINE__)
+static Node* Parser_allocNode0(Parser *p, const char *function, int line)
 {
     (void)p;
+    (void)function;
+    (void)line;
+
+#ifdef TRACE
+    std_printf("Node - %s:%d\n", function, line);
+#endif
+
     Node *n = std_malloc(sizeof(Node));
     if (!n) std_panic("oom");
     return n;
@@ -1073,12 +1094,14 @@ static Node** Parser_parseExprList(Parser *p, uint32_t *exprs_len)
     NodeArray exprs;
     NodeArray_init(&exprs);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Node *expr = Parser_parseExpr(p);
         if (!expr) break;
         NodeArray_append(&exprs, expr);
         if (!Parser_eat(p, token_comma)) break;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop detected");
 
     *exprs_len = exprs.len;
     return exprs.data;
@@ -1093,12 +1116,14 @@ static Node* Parser_parseParamDeclList(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    while (!Parser_peek(p, token_r_paren)) {
+    int c = 0;
+    while (c++ < LOOP_MAX && !Parser_peek(p, token_r_paren)) {
         Node *param = Parser_parseParamDecl(p);
         if (!param) return NULL;
         NodeArray_append(&a, param);
         Parser_eat(p, token_comma);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_param_decl_list;
@@ -1116,12 +1141,14 @@ static Node* Parser_parseAsmInputList(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Node *item = Parser_parseAsmInputItem(p);
         if (!item) break;
         NodeArray_append(&a, item);
         if (!Parser_eat(p, token_comma)) break;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_asm_input_list;
@@ -1139,12 +1166,14 @@ static Node* Parser_parseAsmOutputList(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Node *item = Parser_parseAsmOutputItem(p);
         if (!item) break;
         NodeArray_append(&a, item);
         if (!Parser_eat(p, token_comma)) break;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_asm_output_list;
@@ -1163,12 +1192,14 @@ static Node* Parser_parseSwitchProngList(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Node *prong = Parser_parseSwitchProng(p);
         if (!prong) break;
         NodeArray_append(&a, prong);
         if (!Parser_eat(p, token_comma)) break;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_switch_prong_list;
@@ -1187,13 +1218,15 @@ static Node* Parser_parseIdentifierList(Parser *p)
     BufferArray a;
     BufferArray_init(&a);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         while (Parser_eat(p, token_doc_comment)) {}
         Buffer ident = Parser_eatIdentifier(p);
         if (ident.len == 0) break;
         BufferArray_append(&a, ident);
         if (!Parser_eat(p, token_comma)) break;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_identifier_list;
@@ -1535,7 +1568,8 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
         bool is_volatile = false;
         bool is_allowzero = false;
 
-        while (true) {
+        int c = 0;
+        while (c++ < LOOP_MAX) {
             bytealign = Parser_parseByteAlign(p);
             if (bytealign) {
                 continue;
@@ -1563,6 +1597,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
 
             break;
         }
+        if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
         Node *n = Parser_allocNode(p);
         n->tag = node_prefix_type_op_slice;
@@ -1585,7 +1620,8 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
         bool is_volatile = false;
         bool is_allowzero = false;
 
-        while (true) {
+        int c = 0;
+        while (c++ < LOOP_MAX) {
             addrspace = Parser_parseAddrSpace(p);
             if (addrspace) {
                 continue;
@@ -1613,6 +1649,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
 
             break;
         }
+        if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
         Node *n = Parser_allocNode(p);
         n->tag = node_prefix_type_op_ptr;
@@ -1741,12 +1778,14 @@ static Node* Parser_parseForArgumentsList(Parser *p)
     NodeArray args;
     NodeArray_init(&args);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Node *arg = Parser_parseForItem(p);
         if (!arg) break;
         Parser_eat(p, token_comma);
         NodeArray_append(&args, arg);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_for_args;
@@ -1762,9 +1801,11 @@ static Node* Parser_parseSwitchItem(Parser *p)
 {
     Parser_trace(p);
     Node *start = Parser_parseExpr(p);
+    if (!start) return NULL;
     Node *end = NULL;
     if (Parser_eat(p, token_ellipsis3)) {
         end = Parser_parseExpr(p);
+        if (!end) Parser_fail(p, "expected expression after ...");
     }
 
     Node *n = Parser_allocNode(p);
@@ -1794,12 +1835,14 @@ static Node* Parser_parseSwitchCase(Parser *p)
     NodeArray cases;
     NodeArray_init(&cases);
 
-    while (!Parser_peek(p, token_arrow)) {
+    int c = 0;
+    while (c++ < LOOP_MAX && !Parser_peek(p, token_equal_angle_bracket_right)) {
         Node *item = Parser_parseSwitchItem(p);
         if (!item) break;
         Parser_eat(p, token_comma);
         NodeArray_append(&cases, item);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_switch_case;
@@ -1817,12 +1860,16 @@ static Node* Parser_parseSingleAssignExpr(Parser *p);
 static Node* Parser_parseSwitchProng(Parser *p)
 {
     Parser_trace(p);
+    uint32_t index = p->index;
+
     bool is_inline = Parser_eat(p, token_keyword_inline);
     Node *sc = Parser_parseSwitchCase(p);
-    Parser_expect(p, token_arrow);
+    if (!sc) goto fail;
+    if (!Parser_eat(p, token_equal_angle_bracket_right)) goto fail;
 
     Node *payload = Parser_parsePtrIndexPayload(p);
     Node *expr = Parser_parseSingleAssignExpr(p);
+    if (!expr) goto fail;
 
     Node *n = Parser_allocNode(p);
     n->tag = node_switch_prong;
@@ -1833,6 +1880,10 @@ static Node* Parser_parseSwitchProng(Parser *p)
         .expr = expr,
     };
     return n;
+
+fail:
+    p->index = index;
+    return NULL;
 }
 
 // PtrListPayload <- PIPE ASTERISK? IDENTIFIER (COMMA ASTERISK? IDENTIFIER)* COMMA? PIPE
@@ -1843,7 +1894,8 @@ static Node* Parser_parsePtrListPayload(Parser *p)
     NodeArray_init(&a);
 
     Parser_expect(p, token_pipe);
-    do {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         bool is_pointer = Parser_eat(p, token_asterisk);
         Buffer name = Parser_expectIdentifier(p);
         Node *n = Parser_allocNode(p);
@@ -1853,7 +1905,9 @@ static Node* Parser_parsePtrListPayload(Parser *p)
             .is_pointer = is_pointer,
         };
         NodeArray_append(&a, n);
-    } while (Parser_peek(p, token_comma));
+        if (!Parser_eat(p, token_comma)) break;
+    }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
     Parser_eat(p, token_comma);
     Parser_expect(p, token_pipe);
 
@@ -1873,28 +1927,22 @@ static Node* Parser_parsePtrIndexPayload(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    Parser_expect(p, token_pipe);
-    bool is_first_pass = false;
-    do {
-        bool is_pointer = is_first_pass && Parser_eat(p, token_asterisk);
-        is_first_pass = false;
+    if (!Parser_eat(p, token_pipe)) return NULL;
+    bool is_pointer = Parser_eat(p, token_asterisk);
+    Buffer name = Parser_expectIdentifier(p);
 
-        Buffer name = Parser_expectIdentifier(p);
-        Node *n = Parser_allocNode(p);
-        n->tag = node_payload;
-        n->data.payload = (NodeDataPayload){
-            .name = name,
-            .is_pointer = is_pointer,
-        };
-        NodeArray_append(&a, n);
-    } while (Parser_peek(p, token_comma));
+    Buffer name_index = Buffer_empty();
+    if (Parser_eat(p, token_comma)) {
+        name_index = Parser_expectIdentifier(p);
+    }
     Parser_expect(p, token_pipe);
 
     Node *n = Parser_allocNode(p);
-    n->tag = node_payload_list;
-    n->data.payload_list = (NodeDataPayloadList){
-        .payloads = a.data,
-        .payloads_len = a.len,
+    n->tag = node_payload;
+    n->data.payload_index = (NodeDataPayloadIndex){
+        .name = name,
+        .is_pointer = is_pointer,
+        .name_index = name_index,
     };
     return n;
 }
@@ -1995,7 +2043,10 @@ static Node* Parser_parseParamType(Parser *p)
 {
     Parser_trace(p);
     if (Parser_eat(p, token_keyword_anytype)) {
-        Parser_unimplemented();
+        Node *n = Parser_allocNode(p);
+        n->tag = node_primary_type_expr;
+        n->data.primary_type_expr.tag = node_primary_type_anytype;
+        return n;
     }
     return Parser_parseTypeExpr(p);
 }
@@ -2077,7 +2128,7 @@ static Node* Parser_parseAssignExpr(Parser *p);
 static Node* Parser_parseWhileContinueExpr(Parser *p)
 {
     Parser_trace(p);
-    Parser_expect(p, token_colon);
+    if (!Parser_eat(p, token_colon)) return NULL;
     Parser_expect(p, token_l_paren);
     Node *expr = Parser_parseAssignExpr(p);
     Parser_expect(p, token_r_paren);
@@ -2450,16 +2501,24 @@ fail:
 static Node* Parser_parseErrorSetDecl(Parser *p)
 {
     Parser_trace(p);
-    if (!Parser_eat(p, token_keyword_error)) return NULL;
-    Parser_expect(p, token_l_brace);
+    uint32_t index = p->index;
+
+    if (!Parser_eat(p, token_keyword_error)) goto fail;
+    if (!Parser_eat(p, token_l_brace)) goto fail;
     Node *n = Parser_parseIdentifierList(p);
+    if (!n) goto fail;
     Parser_expect(p, token_r_brace);
     return n;
+
+fail:
+    p->index = index;
+    return NULL;
 }
 
 // ContainerDecl <- (KEYWORD_extern / KEYWORD_packed)? ContainerDeclAuto
 static Node* Parser_parseContainerDecl(Parser *p)
 {
+    Parser_trace(p);
     uint32_t index = p->index;
 
     bool is_extern = Parser_eat(p, token_keyword_extern);
@@ -2627,12 +2686,14 @@ static Node* Parser_parseSuffixExpr(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Node *suffix = Parser_parseSuffixOp(p);
         if (!suffix) suffix = Parser_parseFnCallArguments(p);
         if (!suffix) break;
         NodeArray_append(&a, suffix);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_suffix_expr;
@@ -2652,7 +2713,11 @@ fail:
 static Node* Parser_parseErrorUnionExpr(Parser *p)
 {
     Parser_trace(p);
+    uint32_t index = p->index;
+
     Node *suffix_expr = Parser_parseSuffixExpr(p);
+    if (!suffix_expr) goto fail;
+
     Node *error_type_expr = NULL;
     if (Parser_eat(p, token_bang)) {
         error_type_expr = Parser_parseTypeExpr(p);
@@ -2665,22 +2730,31 @@ static Node* Parser_parseErrorUnionExpr(Parser *p)
         .error_type_expr = error_type_expr,
     };
     return n;
+
+fail:
+    p->index = index;
+    return NULL;
 }
 
 // TypeExpr <- PrefixTypeOp* ErrorUnionExpr
 static Node* Parser_parseTypeExpr(Parser *p)
 {
     Parser_trace(p);
+    uint32_t index = p->index;
+
     NodeArray a;
     NodeArray_init(&a);
 
-    while (true) {
-        Node *prefix_type_op = Parser_parsePrefixTypeOp(p);    // TODO: multiple
+    int c = 0;
+    while (c++ < LOOP_MAX) {
+        Node *prefix_type_op = Parser_parsePrefixTypeOp(p);
         if (!prefix_type_op) break;
         NodeArray_append(&a, prefix_type_op);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *error_union_expr = Parser_parseErrorUnionExpr(p);
+    if (!error_union_expr) goto fail;
 
     Node *n = Parser_allocNode(p);
     n->tag = node_type_expr;
@@ -2690,6 +2764,10 @@ static Node* Parser_parseTypeExpr(Parser *p)
         .type_expr = error_union_expr
     };
     return n;
+
+fail:
+    p->index = index;
+    return NULL;
 }
 
 // InitList
@@ -2701,52 +2779,55 @@ static Node* Parser_parseInitList(Parser *p)
     Parser_trace(p);
     if (!Parser_eat(p, token_l_brace)) return NULL;
 
+    if (Parser_eat(p, token_r_brace)) {
+        Node *n = Parser_allocNode(p);
+        n->tag = node_init_list_empty;
+        return n;
+    }
+
     NodeArray a;
     NodeArray_init(&a);
+    NodeTag tag = node_invalid;
 
     Node *field_init = Parser_parseFieldInit(p);
     if (field_init) {
+        tag = node_init_list_field;
         NodeArray_append(&a, field_init);
 
-        while (Parser_eat(p, token_comma)) {
+        int c = 0;
+        while (c++ < LOOP_MAX && Parser_eat(p, token_comma)) {
             Node *field_init = Parser_parseFieldInit(p);
             if (!field_init) break;
             NodeArray_append(&a, field_init);
         }
-        Parser_eat(p, token_comma);
-        Parser_expect(p, token_r_brace);
-
-        Node *n = Parser_allocNode(p);
-        n->tag = node_init_list_field;
-        n->data.init_list_field = (NodeDataInitList){
-            .nodes = a.data,
-            .nodes_len = a.len,
-        };
-        return n;
+        if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
     }
 
     Node *expr = Parser_parseExpr(p);
     if (expr) {
+        tag = node_init_list_expr;
         NodeArray_append(&a, expr);
 
-        while (Parser_eat(p, token_comma)) {
+        int c = 0;
+        while (c++ < LOOP_MAX && Parser_eat(p, token_comma)) {
             Node *expr = Parser_parseExpr(p);
             if (!expr) break;
             NodeArray_append(&a, expr);
         }
-
-        Node *n = Parser_allocNode(p);
-        n->tag = node_init_list_expr;
-        n->data.init_list_expr = (NodeDataInitList){
-            .nodes = a.data,
-            .nodes_len = a.len,
-        };
-        return n;
+        if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
     }
 
+    if (tag == node_invalid) Parser_fail(p, "expected field_init or expr in init list");
+
+    Parser_eat(p, token_comma);
+    Parser_expect(p, token_r_brace);
 
     Node *n = Parser_allocNode(p);
-    n->tag = node_init_list_empty;
+    n->tag = tag;
+    n->data.init_list_expr = (NodeDataInitList){
+        .nodes = a.data,
+        .nodes_len = a.len,
+    };
     return n;
 }
 
@@ -2755,6 +2836,7 @@ static Node* Parser_parseCurlySuffixExpr(Parser *p)
 {
     Parser_trace(p);
     Node *type = Parser_parseTypeExpr(p);
+    if (!type) return NULL;
     Node *initlist = Parser_parseInitList(p);
     if (!initlist) return type;
 
@@ -2853,11 +2935,14 @@ static Node* Parser_parseBlock(Parser *p)
 
     NodeArray a;
     NodeArray_init(&a);
-    while (!Parser_peek(p, token_r_brace)) {
+
+    int c = 0;
+    while (c++ < LOOP_MAX && !Parser_peek(p, token_r_brace)) {
         Node *n = Parser_parseStatement(p);
         if (!n) break;
         NodeArray_append(&a, n);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
     Parser_expect(p, token_r_brace);
 
     Node *n = Parser_allocNode(p);
@@ -2968,7 +3053,8 @@ static Node* Parser_parsePrimaryExpr(Parser *p)
         return n;
     }
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         Buffer label = Parser_parseBlockLabel(p);
         Node *loop_expr = Parser_parseLoopExpr(p);
         if (!loop_expr) break;
@@ -2981,6 +3067,7 @@ static Node* Parser_parsePrimaryExpr(Parser *p)
         };
         return n;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     p->index = index; // reset possible block label (may not be needed)
 
@@ -2995,17 +3082,21 @@ static Node* Parser_parsePrimaryExpr(Parser *p)
 static Node* Parser_parsePrefixExpr(Parser *p)
 {
     Parser_trace(p);
+    uint32_t index = p->index;
+
     TokenTagArray a;
     TokenTagArray_init(&a);
 
-    while (true) {
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         TokenTag prefixOp = Parser_eatPrefixOp(p);
         if (prefixOp == token_invalid) break;
         TokenTagArray_append(&a, prefixOp);
-        p->index++;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *expr = Parser_parsePrimaryExpr(p);
+    if (!expr) goto fail;
 
     Node *n = Parser_allocNode(p);
     n->tag = node_unary_expr;
@@ -3015,6 +3106,10 @@ static Node* Parser_parsePrefixExpr(Parser *p)
         .expr = expr,
     };
     return n;
+
+fail:
+    p->index = index;
+    return NULL;
 }
 
 // x() x[] x.y x.* x.?
@@ -3066,6 +3161,7 @@ static int Parser_binOpPrecedence(BinOp op)
         case binop_mul_saturate:
         case binop_div:
         case binop_mod:
+        case binop_array_spread:
         case binop_error_set_merge:
             return 8;
 
@@ -3125,6 +3221,8 @@ static BinOp Parser_peekBinOp(Parser *p)
         case token_minus_pipe:
             return binop_sub_saturate;
         case token_asterisk_asterisk:
+            return binop_array_spread;
+        case token_plus_plus:
             return binop_array_concat;
         case token_asterisk:
             return binop_mul;
@@ -3148,7 +3246,9 @@ static Node* Parser_parseExpr0(Parser *p, int min_prec)
 {
     Parser_trace(p);
     Node *lhs = Parser_parsePrefixExpr(p);
-    while (true) {
+
+    int c = 0;
+    while (c++ < LOOP_MAX) {
         BinOp op = Parser_peekBinOp(p);
         if (op == binop_invalid) return lhs;
         int prec = Parser_binOpPrecedence(op);
@@ -3165,6 +3265,7 @@ static Node* Parser_parseExpr0(Parser *p, int min_prec)
         };
         lhs = n;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     return lhs;
 }
@@ -3218,11 +3319,13 @@ static Node* Parser_parseAssignExpr(Parser *p)
     NodeArray a;
     NodeArray_init(&a);
 
-    while (Parser_eat(p, token_comma)) {
+    int c = 0;
+    while (c++ < LOOP_MAX && Parser_eat(p, token_comma)) {
         Node *expr = Parser_parseExpr(p);
         if (!expr) Parser_fail(p, "expected expression");
         NodeArray_append(&a, expr);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
     Parser_expect(p, token_equal);
     Node *rhs = Parser_parseExpr(p);
     if (!rhs) Parser_fail(p, "expected expression");
@@ -3255,13 +3358,15 @@ static Node* Parser_parseVarDeclExprStatement(Parser *p)
         Node *proto = Parser_parseVarDeclProto(p);
         if (!proto) goto fail;
 
-        while (Parser_eat(p, token_comma)) {
+        int c = 0;
+        while (c++ < LOOP_MAX && Parser_eat(p, token_comma)) {
             Node *proto_or_expr = NULL;
             proto_or_expr = Parser_parseVarDeclProto(p);
             if (!proto_or_expr) proto_or_expr = Parser_parseExpr(p);
             if (!proto_or_expr) goto fail;
             NodeArray_append(&a, proto_or_expr);
         }
+        if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
         if (!Parser_eat(p, token_equal)) goto fail;
         Node *expr = Parser_parseExpr(p);
         if (!expr) goto fail;
@@ -3299,13 +3404,16 @@ static Node* Parser_parseVarDeclExprStatement(Parser *p)
     }
 
     if (!Parser_peek(p, token_comma)) goto fail;
-    while (Parser_eat(p, token_comma)) {
+
+    int c = 0;
+    while (c++ < LOOP_MAX && Parser_eat(p, token_comma)) {
         Node *proto_or_expr = NULL;
         proto_or_expr = Parser_parseVarDeclProto(p);
         if (!proto_or_expr) proto_or_expr = Parser_parseExpr(p);
         if (!proto_or_expr) goto fail;
         NodeArray_append(&a, proto_or_expr);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
     if (!Parser_eat(p, token_equal)) goto fail;
     Node *expr = Parser_parseExpr(p);
     if (!expr) goto fail;
@@ -3656,15 +3764,13 @@ static Node* Parser_parseContainerField(Parser *p)
     bool is_comptime = Parser_eat(p, token_keyword_comptime);
     if (Parser_peek(p, token_keyword_fn)) goto fail;
 
-    Buffer name = Buffer_empty();
-    if (Parser_peek(p, token_identifier)) {
-        name = Parser_tokenSlice(p);
-        p->index++;
-        if (!Parser_eat(p, token_colon)) goto fail;
+    Buffer name = Parser_eatIdentifier(p);
+    if (name.len != 0) {
+        if (!Parser_eat(p, token_colon)) p->index--;    // reset, this is not a label
     }
 
     Node *type_expr = Parser_parseTypeExpr(p);
-    if (!type_expr) Parser_fail(p, "expected type expression");
+    if (!type_expr) goto fail;
     Node *bytealign = Parser_parseByteAlign(p);
 
     Node *expr = NULL;
@@ -3759,6 +3865,7 @@ static Node* Parser_expectFnProto(Parser *p)
     Node *callconv = Parser_parseCallConv(p);
     bool is_return_type_error = Parser_eat(p, token_bang);
     Node *return_type = Parser_parseTypeExpr(p);
+    if (!return_type) Parser_fail(p, "expected type expression");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_fn_proto;
@@ -3848,7 +3955,7 @@ static Node* Parser_expectTestDecl(Parser *p)
 
     Buffer name = Parser_tokenSlice(p);
     TokenTag tag = Parser_eatOneOf(p, (TokenTag[]){ token_string_literal, token_identifier }, 2);
-    if (tag == token_invalid) Parser_fail(p, "expected string literal or identifier");
+    if (tag == token_invalid) name = Buffer_empty();
     Node *block = Parser_parseBlock(p);
     if (!block) Parser_fail(p, "expected block");
 
@@ -3906,22 +4013,30 @@ static Node* Parser_expectContainerMembers(Parser *p)
     NodeArray fields;
     NodeArray_init(&fields);
 
-    while (!Parser_peek(p, token_eof)) {
+    int c = 0;
+    while (c++ < LOOP_MAX && !Parser_peek(p, token_eof)) {
         Node *n = Parser_parseContainerDeclaration(p);
         if (!n) break;
         NodeArray_append(&decls, n);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
+
+    c = 0;
     while (!Parser_peek(p, token_eof)) {
         Node *n = Parser_parseContainerField(p);
         if (!n) break;
         NodeArray_append(&fields, n);
         if (!Parser_eat(p, token_comma)) break;
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
+
+    c = 0;
     while (!Parser_peek(p, token_eof)) {
         Node *n = Parser_parseContainerDeclaration(p);
         if (!n) break;
         NodeArray_append(&decls, n);
     }
+    if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     Node *n = Parser_allocNode(p);
     n->tag = node_container_members;
@@ -3947,3 +4062,5 @@ static Node* Parser_parse(Parser *p)
 {
     return Parser_expectRoot(p);
 }
+
+#undef LOOP_MAX

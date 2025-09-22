@@ -41,7 +41,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_container_field:
             AstRenderer_beginSection(r, "node_container_field");
-            astp(r, "name: '%s'", Buffer_staticZ(n->data.container_field.name));
+            astp(r, "name: %s", Buffer_staticZ(n->data.container_field.name));
             astp(r, "is_comptime: %s", boolstring(n->data.container_field.is_comptime));
             AstRenderer_render(r, n->data.container_field.expr);
             AstRenderer_render(r, n->data.container_field.type_expr);
@@ -50,6 +50,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_test_decl:
             AstRenderer_beginSection(r, "test_decl");
+            astp(r, "name: %s", Buffer_staticZ(n->data.test_decl.name));
+            astp(r, "is_ident: %s", boolstring(n->data.test_decl.is_ident));
+            AstRenderer_render(r, n->data.test_decl.block);
             AstRenderer_endSection(r);
             break;
 
@@ -248,6 +251,10 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
                 case node_primary_type_unreachable:
                     astp(r, "unreachable");
                     break;
+
+                case node_primary_type_anytype:
+                    astp(r, "anytype");
+                    break;
             }
             AstRenderer_endSection(r);
             break;
@@ -334,6 +341,10 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_if_statement:
             AstRenderer_beginSection(r, "if_statement");
+            AstRenderer_render(r, n->data.if_statement.condition);
+            AstRenderer_render(r, n->data.if_statement.block);
+            astp(r, "payload_name:", n->data.if_statement.else_payload_name);
+            AstRenderer_render(r, n->data.if_statement.else_statement);
             AstRenderer_endSection(r);
             break;
 
@@ -487,6 +498,11 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_endSection(r);
             break;
 
+        case node_payload_index:
+            AstRenderer_beginSection(r, "payload_index");
+            AstRenderer_endSection(r);
+            break;
+
         case node_payload_list:
             AstRenderer_beginSection(r, "payload_list");
             AstRenderer_endSection(r);
@@ -581,6 +597,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_beginSection(r, "node_asm_expr");
             AstRenderer_endSection(r);
             break;
+
+        case node_invalid:
+            std_panic("unreachable");
     }
 }
 

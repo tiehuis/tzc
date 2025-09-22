@@ -16,5 +16,6 @@ void _Noreturn std_panic(const char *fmt, ...);
 void* std_realloc(void*, size_t);
 void* std_malloc(size_t);
 char* std_readFile(const char *filename, long *fsize);
+char* std_readFileRelative(const char *dir, const char *filename, long *fsize);
 void* std_createFile(const char *filename);
 size_t std_writeFile(void *ptr, size_t size, size_t nitems, void *fh);

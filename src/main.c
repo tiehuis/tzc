@@ -18,29 +18,38 @@ DEFINE_ARRAY(Token)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        std_printf("tzc [-tokens|-ast|-o <output>] <input>\n");
+        std_printf("tzc [-no-emit-bin|-tokens|-ast] -o <file> -lib <zig_lib_dir> <input>\n");
         std_exit(1);
     }
 
     Buffer source = Buffer_empty();
-    const char *output_filename = "tzc_output.c";
+    const char *out_filename = NULL;
+    const char *lib_dir = NULL;
     bool emit_tokens = false;
     bool emit_ast = false;
+    bool no_emit_bin = false;
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] != '-') {
             if (source.len != 0) std_panic("multiple files provided\n");
             source = Buffer_fromFile(argv[i]);
+        } else if (strequal(argv[i], "-lib")) {
+            if (++i >= argc) std_panic("missing parameter for -lib\n");
+            lib_dir = argv[i];
         } else if (strequal(argv[i], "-o")) {
             if (++i >= argc) std_panic("missing parameter for -o\n");
-            output_filename = argv[i];
+            out_filename = argv[i];
         } else if (strequal(argv[i], "-tokens")) {
             emit_tokens = true;
         } else if (strequal(argv[i], "-ast")) {
             emit_ast = true;
+        } else if (strequal(argv[i], "-no-emit-bin")) {
+            no_emit_bin = true;
         } else {
             std_panic("unknown option '%s'\n", argv[i]);
         }
     }
+    if (!no_emit_bin && !lib_dir) std_panic("-lib <zig_lib_dir> is required\n");
+    if (!no_emit_bin && !out_filename) std_panic("-o <file> is required\n"); // just append .c to input file
 
     TokenArray tokens;
     TokenArray_init(&tokens);
@@ -57,7 +66,7 @@ int main(int argc, char **argv)
             Token token = tokens.data[i];
             std_printf("|%u: %s: %s\n", i, TokenTag_name(token.tag), Buffer_staticZ(Buffer_slice(source, token.loc.start, token.loc.end)));
         }
-        std_exit(0);
+        return 0;
     }
 
     Parser p;
@@ -68,10 +77,12 @@ int main(int argc, char **argv)
         AstRenderer r;
         AstRenderer_init(&r, &p);
         AstRenderer_render(&r, root);
-        std_exit(0);
+        return 0;
     }
 
-    CodeGen cg;
-    CodeGen_init(&cg, output_filename);
-    CodeGen_gen(&cg, root);
+    if (!no_emit_bin) {
+        CodeGen cg;
+        CodeGen_init(&cg, out_filename, lib_dir);
+        CodeGen_gen(&cg, root);
+    }
 }
