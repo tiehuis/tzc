@@ -11,7 +11,7 @@ any other bugs compiling other projects are considered out of scope.
 ## Status
 
  - [x] Tokenizer
- - [ ] Parser (~75%)
+ - [x] Parser
  - [ ] CodeGen (1%)
 
 ## Overview

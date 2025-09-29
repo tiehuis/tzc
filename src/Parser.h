@@ -4,6 +4,7 @@
 
 //#define TRACE
 
+// TODO: can we just track the last p->index and compare against to check invalid cycles/loops
 #define LOOP_MAX 10000
 
 typedef struct Node Node;
@@ -81,6 +82,7 @@ typedef struct {
     bool is_varargs;
     TokenTag modifier;
     Node *type;
+    Buffer identifier;
 } NodeDataParamDecl;
 
 typedef struct {
@@ -172,6 +174,7 @@ typedef enum {
     node_primary_type_dot_identifier,
     node_primary_type_dot_initlist,
     node_primary_type_error_set_decl,
+    node_primary_type_fn_proto,
     node_primary_type_grouped_expr,
     node_primary_type_labeled_type_expr,
     node_primary_type_if_type_expr,
@@ -202,6 +205,8 @@ const char* NodePrimaryTypeTag_name(NodePrimaryTypeTag tag)
             return "node_primary_type_dot_initlist";
         case node_primary_type_error_set_decl:
             return "node_primary_type_error_set_decl";
+        case node_primary_type_fn_proto:
+            return "node_primary_type_fn_proto";
         case node_primary_type_grouped_expr:
             return "node_primary_type_grouped_expr";
         case node_primary_type_labeled_type_expr:
@@ -410,6 +415,7 @@ typedef struct {
 
 typedef enum {
    node_ptr_type_single,
+   node_ptr_type_double,
    node_ptr_type_multi,
    node_ptr_type_c,
    node_ptr_type_sentinel,
@@ -565,6 +571,12 @@ typedef struct {
     Node *asm_output;
 } NodeDataAsmExpr;
 
+typedef struct {
+    Node *type;
+    Buffer name;
+    bool is_type;
+} NodeDataTypeOrName;
+
 typedef union NodeData {
     NodeDataContainerMembers container_members;
     NodeDataContainerField container_field;
@@ -652,6 +664,7 @@ typedef union NodeData {
     NodeDataAsmInput asm_input;
     NodeDataAsmOutput asm_output;
     NodeDataAsmExpr asm_expr;
+    NodeDataTypeOrName type_or_name;
 } NodeData;
 
 typedef enum NodeTag {
@@ -749,6 +762,7 @@ typedef enum NodeTag {
     node_asm_input,
     node_asm_output,
     node_asm_expr,
+    node_type_or_name,
     node_invalid,
 } NodeTag;
 
@@ -944,6 +958,8 @@ static const char* NodeTag_name(NodeTag tag)
             return "node_asm_output";
         case node_asm_expr:
             return "node_asm_expr";
+        case node_type_or_name:
+            return "node_type_or_name";
         case node_invalid:
             return "node_invalid";
     }
@@ -963,7 +979,10 @@ typedef struct Parser {
     Buffer source;
     Token *tokens;
     uint32_t tokens_len;
+    uint64_t memory_tracking_bytes_allocated;
 } Parser;
+
+static void Parser_debugNode(Parser *p, Node *n, const char *prefix);
 
 static void Parser_init(Parser *p, Buffer source, Token *tokens, uint32_t tokens_len)
 {
@@ -971,6 +990,7 @@ static void Parser_init(Parser *p, Buffer source, Token *tokens, uint32_t tokens
     p->tokens = tokens;
     p->tokens_len = tokens_len;
     p->index = 0;
+    p->memory_tracking_bytes_allocated = 0;
 }
 
 #define Parser_fail(p_, ...) Parser_fail0(p_, __LINE__, "parse error: " __VA_ARGS__)
@@ -1080,6 +1100,7 @@ static Node* Parser_allocNode0(Parser *p, const char *function, int line)
     std_printf("Node - %s:%d\n", function, line);
 #endif
 
+    p->memory_tracking_bytes_allocated += sizeof(Node);
     Node *n = std_malloc(sizeof(Node));
     if (!n) std_panic("oom");
     return n;
@@ -1379,7 +1400,12 @@ static Node* Parser_parsePtrTypeStart(Parser *p)
         };
         return n;
     } else if (Parser_eat(p, token_asterisk_asterisk)) {
-        Parser_fail(p, "unsupported **");
+        Node *n = Parser_allocNode(p);
+        n->tag = node_ptr_type_start;
+        n->data.ptr_type_start = (NodeDataPtrTypeStart){
+            .type = node_ptr_type_double,
+        };
+        return n;
     }
 
     if (!Parser_eat(p, token_l_bracket)) goto fail;
@@ -1393,7 +1419,7 @@ static Node* Parser_parsePtrTypeStart(Parser *p)
         sentinel_expr = Parser_parseExpr(p);
         if (!sentinel_expr) Parser_fail(p, "expected expression for sentinel");
     } else {
-        if (Buffer_eql(Parser_tokenSlice(p), "c")) {
+        if (!Buffer_eql(Parser_tokenSlice(p), "c")) {
             p->index++;
             type = node_ptr_type_c;
         }
@@ -1513,7 +1539,7 @@ static Node* Parser_parseSuffixOp(Parser *p)
     return NULL;
 }
 
-// Align <- KEYWORD_align LPAREN Expr (COLON Expr COLON Expr)?
+// Align <- KEYWORD_align LPAREN Expr (COLON Expr COLON Expr)? RPAREN
 static Node* Parser_parseAlign(Parser *p)
 {
     Parser_trace(p);
@@ -1529,6 +1555,7 @@ static Node* Parser_parseAlign(Parser *p)
         bit_backing_integer_size = Parser_parseExpr(p);
         if (!bit_backing_integer_size) Parser_fail(p, "expected expression for bit_backing_integer_size");
     }
+    Parser_expect(p, token_r_paren);
 
     Node *n = Parser_allocNode(p);
     n->tag = node_ptr_align_expr;
@@ -2070,8 +2097,11 @@ static Node* Parser_parseParamDecl(Parser *p)
 
     while (Parser_eat(p, token_doc_comment)) {}
     TokenTag modifier = Parser_eatOneOf(p, (TokenTag[]){ token_keyword_noalias, token_keyword_comptime }, 2);
-    if (Parser_eat(p, token_identifier)) {
-        Parser_eat(p, token_colon);
+    // This may actually be the ParamType. Reset if no colon follows.
+    Buffer identifier = Parser_eatIdentifier(p);
+    if (identifier.len != 0 && !Parser_eat(p, token_colon)) {
+        identifier = Buffer_empty();
+        p->index--;
     }
     Node *type = Parser_parseParamType(p);
     if (!type) goto fail;
@@ -2081,6 +2111,7 @@ static Node* Parser_parseParamDecl(Parser *p)
     n->data.param_decl = (NodeDataParamDecl){
         .is_varargs = false,
         .modifier = modifier,
+        .identifier = identifier,
         .type = type,
     };
     return n;
@@ -2144,7 +2175,7 @@ static Node* Parser_parseFieldInit(Parser *p)
     if (!Parser_eat(p, token_period)) return NULL;
     Buffer name = Parser_eatIdentifier(p);
     if (name.len == 0) goto fail;
-    Parser_expect(p, token_equal);
+    if (!Parser_eat(p, token_equal)) goto fail;
     Node *expr = Parser_parseExpr(p);
     if (!expr) Parser_fail(p, "expected expression");
 
@@ -2247,11 +2278,17 @@ static Node* Parser_parseAsmOutputItem(Parser *p)
     Buffer lit = Parser_tokenSlice(p);
     if (!Parser_eat(p, token_string_literal)) Parser_fail(p, "expected string literal");
     Parser_expect(p, token_l_paren);
-    Node *expr = NULL;
+
+    Node *output_expr = Parser_allocNode(p);
+    output_expr->tag = node_type_or_name;
     if (Parser_eat(p, token_arrow)) {
-        expr = Parser_parseTypeExpr(p);
-        // if (!expr) expr = Parser_eatIdentifier(p); // TODO: identifier as a node
-        if (!expr) Parser_fail(p, "expected type expr or identifier");
+        Node *expr = Parser_parseTypeExpr(p);
+        if (!expr) Parser_fail(p, "expected type expression");
+        output_expr->data.type_or_name.is_type = true;
+        output_expr->data.type_or_name.type = expr;
+    } else {
+        output_expr->data.type_or_name.is_type = false;
+        output_expr->data.type_or_name.name = Parser_expectIdentifier(p);
     }
     Parser_expect(p, token_r_paren);
 
@@ -2260,7 +2297,7 @@ static Node* Parser_parseAsmOutputItem(Parser *p)
     n->data.asm_output_item = (NodeDataAsmOutputItem){
         .name = name,
         .lit = lit,
-        .output_expr = expr,
+        .output_expr = output_expr,
     };
     return n;
 }
@@ -2409,8 +2446,10 @@ static Node* Parser_parseLabeledTypeExpr(Parser *p)
     uint32_t index = p->index;
 
     Buffer label = Parser_parseBlockLabel(p);
-    if (label.len != 0) {
+
+    if (Parser_peek(p, token_l_brace)) {
         Node *block = Parser_parseBlock(p);
+        if (!block) goto fail;
         Node *n = Parser_allocNode(p);
         n->tag = node_labeled_block;
         n->data.labeled_type_expr = (NodeDataLabeledTypeExpr){
@@ -2418,10 +2457,12 @@ static Node* Parser_parseLabeledTypeExpr(Parser *p)
             .node = block,
         };
         return n;
-    }
+    } else if (Parser_peek(p, token_keyword_inline)
+        || Parser_peek(p, token_keyword_for)
+        || Parser_peek(p, token_keyword_while)) {
+        Node *loop_type_expr = Parser_parseLoopTypeExpr(p);
+        if (loop_type_expr) goto fail;
 
-    Node *loop_type_expr = Parser_parseLoopTypeExpr(p);
-    if (loop_type_expr) {
         Node *n = Parser_allocNode(p);
         n->tag = node_labeled_loop_expr;
         n->data.labeled_type_expr = (NodeDataLabeledTypeExpr){
@@ -2429,10 +2470,10 @@ static Node* Parser_parseLabeledTypeExpr(Parser *p)
             .node = loop_type_expr,
         };
         return n;
-    }
+    } else if (Parser_peek(p, token_keyword_switch)) {
+        Node *switch_expr = Parser_parseSwitchExpr(p);
+        if (!switch_expr) goto fail;
 
-    Node *switch_expr = Parser_parseSwitchExpr(p);
-    if (switch_expr) {
         Node *n = Parser_allocNode(p);
         n->tag = node_labeled_switch_expr;
         n->data.labeled_type_expr = (NodeDataLabeledTypeExpr){
@@ -2442,6 +2483,7 @@ static Node* Parser_parseLabeledTypeExpr(Parser *p)
         return n;
     }
 
+fail:
     p->index = index;
     return NULL;
 }
@@ -2541,6 +2583,7 @@ fail:
 }
 
 static Node* Parser_parseInitList(Parser *p);
+static Node* Parser_expectFnProto(Parser *p);
 // PrimaryTypeExpr
 //     <- BUILTINIDENTIFIER FnCallArguments
 //      / CHAR_LITERAL
@@ -2608,6 +2651,12 @@ static Node* Parser_parsePrimaryTypeExpr(Parser *p)
         expr.data = (NodePrimaryTypeData){ .node = error_set_decl };
         goto done;
     }
+    if (Parser_peek(p, token_keyword_fn)) {
+        Node *fn_proto = Parser_expectFnProto(p);
+        expr.tag = node_primary_type_fn_proto;
+        expr.data = (NodePrimaryTypeData){ .node = fn_proto };
+        goto done;
+    }
     Node *grouped_expr = Parser_parseGroupedExpr(p);
     if (grouped_expr) {
         expr.tag = node_primary_type_grouped_expr;
@@ -2658,6 +2707,15 @@ static Node* Parser_parsePrimaryTypeExpr(Parser *p)
         goto done;
     }
     if (Parser_eat(p, token_string_literal)) {
+        expr.tag = node_primary_type_string_literal;
+        expr.data = (NodePrimaryTypeData){ .raw = raw };
+        goto done;
+    }
+    // TODO: could merge multiline literals.
+    // We need to truncate the prefix of the raw data and merge the results here.
+    if (Parser_peek(p, token_multiline_string_literal_line)) {
+        while (Parser_eat(p, token_multiline_string_literal_line)) {}
+
         expr.tag = node_primary_type_string_literal;
         expr.data = (NodePrimaryTypeData){ .raw = raw };
         goto done;
@@ -3602,10 +3660,17 @@ static Node* Parser_parseLabeledStatement(Parser *p)
     Buffer label = Parser_parseBlockLabel(p);
     Node *block = NULL;
 
-    block = Parser_parseBlock(p);
-    if (!block) block = Parser_parseLoopStatement(p);
-    if (!block) block = Parser_parseSwitchExpr(p);
-    if (!block) return NULL; //Parser_fail(p, "expected block, loop or switch");
+    if (Parser_peek(p, token_l_brace)) {
+        block = Parser_parseBlock(p);
+    } else if (Parser_peek(p, token_keyword_inline)
+        || Parser_peek(p, token_keyword_for)
+        || Parser_peek(p, token_keyword_while)) {
+        block = Parser_parseLoopStatement(p);
+    } else if (Parser_peek(p, token_keyword_switch)) {
+        block = Parser_parseSwitchExpr(p);
+    } else {
+        return NULL;
+    }
 
     Node *n = Parser_allocNode(p);
     n->tag = node_labeled_statement;
@@ -3854,7 +3919,7 @@ static Node* Parser_expectFnProto(Parser *p)
 {
     Parser_trace(p);
     Parser_expect(p, token_keyword_fn);
-    Buffer name = Parser_expectIdentifier(p);
+    Buffer name = Parser_eatIdentifier(p);
     Parser_expect(p, token_l_paren);
     Node *params = NULL;
     if (!Parser_peek(p, token_r_paren)) params = Parser_parseParamDeclList(p);
@@ -4022,7 +4087,7 @@ static Node* Parser_expectContainerMembers(Parser *p)
     if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     c = 0;
-    while (!Parser_peek(p, token_eof)) {
+    while (c++ < LOOP_MAX && !Parser_peek(p, token_eof)) {
         Node *n = Parser_parseContainerField(p);
         if (!n) break;
         NodeArray_append(&fields, n);
@@ -4031,7 +4096,7 @@ static Node* Parser_expectContainerMembers(Parser *p)
     if (c >= LOOP_MAX) Parser_fail(p, "infinite loop");
 
     c = 0;
-    while (!Parser_peek(p, token_eof)) {
+    while (c++ < LOOP_MAX && !Parser_peek(p, token_eof)) {
         Node *n = Parser_parseContainerDeclaration(p);
         if (!n) break;
         NodeArray_append(&decls, n);

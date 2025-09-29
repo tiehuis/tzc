@@ -237,6 +237,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
                 case node_primary_type_container_decl:
                 case node_primary_type_dot_initlist:
                 case node_primary_type_error_set_decl:
+                case node_primary_type_fn_proto:
                 case node_primary_type_grouped_expr:
                 case node_primary_type_labeled_type_expr:
                 case node_primary_type_if_type_expr:
@@ -598,6 +599,11 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_endSection(r);
             break;
 
+        case node_type_or_name:
+            AstRenderer_beginSection(r, "node_type_or_name");
+            AstRenderer_endSection(r);
+            break;
+
         case node_invalid:
             std_panic("unreachable");
     }
@@ -605,3 +611,12 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
 #undef boolstring
 #undef astp
+
+__attribute__((unused))
+static void Parser_debugNode(Parser *p, Node *n, const char *prefix)
+{
+    std_printf("|%s\n", prefix);
+    AstRenderer r;
+    AstRenderer_init(&r, p);
+    AstRenderer_render(&r, n);
+}
