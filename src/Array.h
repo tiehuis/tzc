@@ -22,4 +22,17 @@ static void TypeName##Array_append(TypeName##Array *a, Type tag)              \
         a->data = n;                                                          \
     }                                                                         \
     a->data[a->len++] = tag;                                                  \
+}                                                                             \
+__attribute__((unused))                                                       \
+static void TypeName##Array_appendMany(TypeName##Array *a, Type *tags, size_t tags_len)   \
+{                                                                             \
+    while (a->len + tags_len >= a->cap) {                                     \
+        a->cap *= 2;                                                          \
+        Type *n = std_realloc(a->data, sizeof(Type) * a->cap);                \
+        if (!n) std_panic("oom");                                             \
+        a->data = n;                                                          \
+    }                                                                         \
+    for (size_t i = 0; i < tags_len; i++) {                                   \
+        a->data[a->len++] = tags[i];                                          \
+    }                                                                         \
 }

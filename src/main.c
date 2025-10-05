@@ -17,6 +17,8 @@ DEFINE_ARRAY(Token)
 
 int main(int argc, char **argv)
 {
+    if (sizeof(Node) != 64) std_panic("sizeof(Node) != 64: = %zu\n", sizeof(Node));
+
     if (argc < 2) {
         std_printf("tzc [-no-emit-bin|-tokens|-ast] -o <file> -lib <zig_lib_dir> <input>\n");
         std_exit(1);
@@ -28,6 +30,7 @@ int main(int argc, char **argv)
     bool emit_tokens = false;
     bool emit_ast = false;
     bool no_emit_bin = false;
+    bool report = false;
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] != '-') {
             if (source.len != 0) std_panic("multiple files provided\n");
@@ -42,6 +45,8 @@ int main(int argc, char **argv)
             emit_tokens = true;
         } else if (strequal(argv[i], "-ast")) {
             emit_ast = true;
+        } else if (strequal(argv[i], "-report")) {
+            report = true;
         } else if (strequal(argv[i], "-no-emit-bin")) {
             no_emit_bin = true;
         } else {
@@ -73,6 +78,11 @@ int main(int argc, char **argv)
     Parser_init(&p, source, tokens.data, tokens.len);
     Node *root = Parser_parse(&p);
 
+    if (report) {
+        std_printf("tokens: size=%2.fKiB, count=%zu\n", (float) tokens.len * sizeof(Token) / 1024, tokens.len);
+        std_printf(" nodes: size=%2.fKiB\n", (float) p.nodes_count * sizeof(Node) / 1024);
+    }
+
     if (emit_ast) {
         AstRenderer r;
         AstRenderer_init(&r, &p);
@@ -82,7 +92,7 @@ int main(int argc, char **argv)
 
     if (!no_emit_bin) {
         CodeGen cg;
-        CodeGen_init(&cg, out_filename, lib_dir);
+        CodeGen_init(&cg, &p, out_filename, lib_dir);
         CodeGen_gen(&cg, root);
     }
 }

@@ -5,7 +5,7 @@
 //#define TRACE
 
 // TODO: can we just track the last p->index and compare against to check invalid cycles/loops
-#define LOOP_MAX 10000
+#define LOOP_MAX 3000
 
 typedef struct Node Node;
 
@@ -48,13 +48,25 @@ typedef struct {
     Node *expr;
 } NodeDataGlobalVarDecl;
 
+typedef enum {
+    decl_modifier_export        = 0x01,
+    decl_modifier_extern        = 0x02,
+    decl_modifier_inline        = 0x04,
+    decl_modifier_noinline      = 0x08,
+    decl_modifier_threadlocal   = 0x10,
+} DeclModifiers;
+
 typedef struct {
     Node *fn_proto;
     Node *block;
+    DeclModifiers modifiers;
+    Buffer extern_name;
 } NodeDataDeclFn;
 
 typedef struct {
     Node *global_var_decl;
+    DeclModifiers modifiers;
+    Buffer extern_name;
 } NodeDataDeclGlobalVarDecl;
 
 typedef struct {
@@ -66,12 +78,16 @@ typedef struct {
     Buffer name;
     Node *params;
     Node *return_type;
+    Node *extra_data;
+    bool is_return_type_error;
+} NodeDataFnProto;
+
+typedef struct {
     Node *bytealign;
     Node *addrspace;
     Node *linksection;
     Node *callconv;
-    bool is_return_type_error;
-} NodeDataFnProto;
+} NodeDataFnProtoExtra;
 
 typedef struct {
     Node **params;
@@ -382,22 +398,24 @@ typedef struct {
     Node *bit_backing_integer_size;
 } NodeDataPtrAlignExpr;
 
+typedef enum {
+    pointer_modifier_const      = 0x01,
+    pointer_modifier_volatile   = 0x02,
+    pointer_modifier_allowzero  = 0x04,
+} PointerModifiers;
+
 typedef struct {
     Node *slice;
     Node *bytealign;
     Node *addrspace;
-    bool is_const;
-    bool is_volatile;
-    bool is_allowzero;
+    PointerModifiers modifiers;
 } NodeDataPrefixTypeSlice;
 
 typedef struct {
     Node *ptr;
     Node *addrspace;
     Node *align;
-    bool is_const;
-    bool is_volatile;
-    bool is_allowzero;
+    PointerModifiers modifiers;
 } NodeDataPrefixTypePtr;
 
 typedef struct {
@@ -588,6 +606,7 @@ typedef union NodeData {
     NodeDataDeclGlobalVarDecl decl_global_var_decl;
     NodeDataBlock block;
     NodeDataFnProto fn_proto;
+    NodeDataFnProtoExtra fn_proto_extra;
     NodeDataParamDeclList param_decl_list;
     NodeDataParamDecl param_decl;
     NodeDataTypeExpr type_expr;
@@ -678,6 +697,7 @@ typedef enum NodeTag {
     node_decl_global_var_decl,
     node_block,
     node_fn_proto,
+    node_fn_proto_extra,
     node_param_decl_list,
     node_param_decl,
     node_type_expr,
@@ -790,6 +810,8 @@ static const char* NodeTag_name(NodeTag tag)
             return "node_block";
         case node_fn_proto:
             return "node_fn_proto";
+        case node_fn_proto_extra:
+            return "node_fn_proto_extra";
         case node_param_decl_list:
             return "node_param_decl_list";
         case node_param_decl:
@@ -979,7 +1001,7 @@ typedef struct Parser {
     Buffer source;
     Token *tokens;
     uint32_t tokens_len;
-    uint64_t memory_tracking_bytes_allocated;
+    uint32_t nodes_count;
 } Parser;
 
 static void Parser_debugNode(Parser *p, Node *n, const char *prefix);
@@ -990,7 +1012,7 @@ static void Parser_init(Parser *p, Buffer source, Token *tokens, uint32_t tokens
     p->tokens = tokens;
     p->tokens_len = tokens_len;
     p->index = 0;
-    p->memory_tracking_bytes_allocated = 0;
+    p->nodes_count = 0;
 }
 
 #define Parser_fail(p_, ...) Parser_fail0(p_, __LINE__, "parse error: " __VA_ARGS__)
@@ -1100,7 +1122,7 @@ static Node* Parser_allocNode0(Parser *p, const char *function, int line)
     std_printf("Node - %s:%d\n", function, line);
 #endif
 
-    p->memory_tracking_bytes_allocated += sizeof(Node);
+    p->nodes_count++;
     Node *n = std_malloc(sizeof(Node));
     if (!n) std_panic("oom");
     return n;
@@ -1591,9 +1613,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
     if (slice_type_start) {
         Node *bytealign = NULL;
         Node *addrspace = NULL;
-        bool is_const = false;
-        bool is_volatile = false;
-        bool is_allowzero = false;
+        PointerModifiers modifiers = 0;
 
         int c = 0;
         while (c++ < LOOP_MAX) {
@@ -1608,17 +1628,17 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
             }
 
             if (Parser_eat(p, token_keyword_const)) {
-                is_const = true;
+                modifiers |= pointer_modifier_const;
                 continue;
             }
 
             if (Parser_eat(p, token_keyword_volatile)) {
-                is_volatile = true;
+                modifiers |= pointer_modifier_volatile;
                 continue;
             }
 
             if (Parser_eat(p, token_keyword_allowzero)) {
-                is_allowzero = true;
+                modifiers |= pointer_modifier_allowzero;
                 continue;
             }
 
@@ -1632,9 +1652,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
             .slice = slice_type_start,
             .bytealign = bytealign,
             .addrspace = addrspace,
-            .is_const = is_const,
-            .is_volatile = is_volatile,
-            .is_allowzero = is_allowzero,
+            .modifiers = modifiers,
         };
         return n;
     }
@@ -1643,9 +1661,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
     if (ptr_type_start) {
         Node *addrspace = NULL;
         Node *align = NULL;
-        bool is_const = false;
-        bool is_volatile = false;
-        bool is_allowzero = false;
+        PointerModifiers modifiers = 0;
 
         int c = 0;
         while (c++ < LOOP_MAX) {
@@ -1660,17 +1676,17 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
             }
 
             if (Parser_eat(p, token_keyword_const)) {
-                is_const = true;
+                modifiers |= pointer_modifier_const;
                 continue;
             }
 
             if (Parser_eat(p, token_keyword_volatile)) {
-                is_volatile = true;
+                modifiers |= pointer_modifier_volatile;
                 continue;
             }
 
             if (Parser_eat(p, token_keyword_allowzero)) {
-                is_allowzero = true;
+                modifiers |= pointer_modifier_allowzero;
                 continue;
             }
 
@@ -1681,12 +1697,10 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
         Node *n = Parser_allocNode(p);
         n->tag = node_prefix_type_op_ptr;
         n->data.prefix_type_ptr = (NodeDataPrefixTypePtr){
-            .ptr = slice_type_start,
+            .ptr = ptr_type_start,
             .align = align,
             .addrspace = addrspace,
-            .is_const = is_const,
-            .is_volatile = is_volatile,
-            .is_allowzero = is_allowzero,
+            .modifiers = modifiers,
         };
         return n;
     }
@@ -3302,7 +3316,6 @@ static BinOp Parser_peekBinOp(Parser *p)
 // Expr <- BoolOrExpr
 static Node* Parser_parseExpr0(Parser *p, int min_prec)
 {
-    Parser_trace(p);
     Node *lhs = Parser_parsePrefixExpr(p);
 
     int c = 0;
@@ -3643,7 +3656,6 @@ static Node* Parser_parseLoopStatement(Parser *p)
         return NULL;
     }
 
-
     Node *n = Parser_allocNode(p);
     n->tag = node_loop_statement;
     n->data.loop_statement = (NodeDataLoopStatement){
@@ -3932,16 +3944,25 @@ static Node* Parser_expectFnProto(Parser *p)
     Node *return_type = Parser_parseTypeExpr(p);
     if (!return_type) Parser_fail(p, "expected type expression");
 
+    Node *extra = NULL;
+    if (bytealign || addrspace || linksection || callconv) {
+        extra = Parser_allocNode(p);
+        extra->tag = node_fn_proto_extra;
+        extra->data.fn_proto_extra = (NodeDataFnProtoExtra){
+            .bytealign = bytealign,
+            .addrspace = addrspace,
+            .linksection = linksection,
+            .callconv = callconv,
+        };
+    }
+
     Node *n = Parser_allocNode(p);
     n->tag = node_fn_proto;
     n->data.fn_proto = (NodeDataFnProto){
         .name = name,
         .params = params,
         .return_type = return_type,
-        .bytealign = bytealign,
-        .addrspace = addrspace,
-        .linksection = linksection,
-        .callconv = callconv,
+        .extra_data = extra,
         .is_return_type_error = is_return_type_error,
     };
     return n;
@@ -3955,18 +3976,44 @@ static Node* Parser_parseDecl(Parser *p)
     Parser_trace(p);
     uint32_t index = p->index;
 
+    uint32_t modifiers = 0;
+    Buffer extern_name = Buffer_empty();
+
     // can be stricter with this chain
-    TokenTag tag = Parser_eatOneOf(p, (TokenTag[]){
-        token_keyword_export,
-        token_keyword_extern,
-        token_keyword_inline,
-        token_keyword_noinline,
-        token_keyword_threadlocal
-    }, 5);
-    if (tag == token_keyword_extern) {
-        Parser_eat(p, token_string_literal);
+    switch (p->tokens[p->index].tag) {
+        case token_keyword_export:
+            p->index++;
+            modifiers |= decl_modifier_export;
+            break;
+
+        case token_keyword_extern:
+            p->index++;
+            modifiers |= decl_modifier_extern;
+            extern_name = Parser_tokenSlice(p);
+            if (!Parser_eat(p, token_string_literal)) extern_name = Buffer_empty();
+            break;
+
+        case token_keyword_inline:
+            p->index++;
+            modifiers |= decl_modifier_inline;
+            break;
+
+        case token_keyword_noinline:
+            p->index++;
+            modifiers |= decl_modifier_noinline;
+            break;
+
+        case token_keyword_threadlocal:
+            p->index++;
+            modifiers |= decl_modifier_threadlocal;
+            break;
+
+        default:
+            break;
     }
-    Parser_eat(p, token_keyword_threadlocal);
+    if (Parser_eat(p, token_keyword_threadlocal)) {
+        modifiers |= decl_modifier_noinline;
+    }
 
     if (Parser_peek(p, token_keyword_fn)) {
         Node *fn_proto = Parser_expectFnProto(p);
@@ -3978,6 +4025,8 @@ static Node* Parser_parseDecl(Parser *p)
         n->data.decl_fn = (NodeDataDeclFn){
             .fn_proto = fn_proto,
             .block = block,
+            .modifiers = modifiers,
+            .extern_name = extern_name,
         };
         return n;
     } else {
@@ -3988,6 +4037,8 @@ static Node* Parser_parseDecl(Parser *p)
         n->tag = node_decl_global_var_decl;
         n->data.decl_global_var_decl = (NodeDataDeclGlobalVarDecl){
             .global_var_decl = global_var_decl,
+            .modifiers = modifiers,
+            .extern_name = extern_name,
         };
         return n;
     }

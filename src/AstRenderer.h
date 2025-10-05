@@ -14,7 +14,7 @@ static void AstRenderer_init(AstRenderer *r, Parser *p)
 
 static void AstRenderer_beginSection(AstRenderer *r, const char *name)
 {
-    astp(r, "%s", name);
+    astp(r, "|%s", name);
     r->indent++;
 }
 static void AstRenderer_endSection(AstRenderer *r)
@@ -86,6 +86,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_decl_global_var_decl:
             AstRenderer_beginSection(r, "decl_global_var_decl");
+            AstRenderer_render(r, n->data.decl_global_var_decl.global_var_decl);
             AstRenderer_endSection(r);
             break;
 
@@ -105,13 +106,25 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_endSection(r);
             break;
 
+        case node_fn_proto_extra:
+            std_panic("unreachable");
+
         case node_param_decl_list:
             AstRenderer_beginSection(r, "param_decl_list");
+            for (uint32_t i = 0; i < n->data.param_decl_list.params_len; i++) {
+                AstRenderer_render(r, n->data.param_decl_list.params[i]);
+            }
             AstRenderer_endSection(r);
             break;
 
         case node_param_decl:
             AstRenderer_beginSection(r, "param_decl");
+            astp(r, "name: %s", Buffer_staticZ(n->data.param_decl.identifier));
+            astp(r, "is_varargs: %s", boolstring(n->data.param_decl.is_varargs));
+            if (n->data.param_decl.modifier != token_invalid) {
+                astp(r, "modifier: %s", TokenTag_name(n->data.param_decl.modifier));
+            }
+            AstRenderer_render(r, n->data.param_decl.type);
             AstRenderer_endSection(r);
             break;
 
@@ -125,6 +138,11 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             break;
 
         case node_error_union_expr:
+            if (n->data.error_union_expr.error_type_expr == NULL) {
+                AstRenderer_render(r, n->data.error_union_expr.suffix_expr);
+                return;
+            }
+
             AstRenderer_beginSection(r, "error_union_expr");
             AstRenderer_render(r, n->data.error_union_expr.error_type_expr);
             AstRenderer_render(r, n->data.error_union_expr.suffix_expr);
@@ -132,6 +150,11 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             break;
 
         case node_suffix_expr:
+            if (n->data.suffix_expr.suffixes_len == 0) {
+                AstRenderer_render(r, n->data.suffix_expr.expr);
+                return;
+            }
+
             AstRenderer_beginSection(r, "suffix_expr");
             AstRenderer_render(r, n->data.suffix_expr.expr);
             for (uint32_t i = 0; i < n->data.suffix_expr.suffixes_len; i++) {
@@ -142,35 +165,46 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_comptime_statement:
             AstRenderer_beginSection(r, "comptime_statement");
+            AstRenderer_render(r, n->data.comptime_statement.comptime_statement);
             AstRenderer_endSection(r);
             break;
 
         case node_nosuspend_statement:
             AstRenderer_beginSection(r, "nosuspend_statement");
+            AstRenderer_render(r, n->data.nosuspend_statement.block_expr);
             AstRenderer_endSection(r);
             break;
 
         case node_suspend_statement:
             AstRenderer_beginSection(r, "suspend_statement");
+            AstRenderer_render(r, n->data.suspend_statement.block_expr);
             AstRenderer_endSection(r);
             break;
 
         case node_defer_statement:
             AstRenderer_beginSection(r, "defer_statement");
+            AstRenderer_render(r, n->data.defer_statement.block_expr);
             AstRenderer_endSection(r);
             break;
 
         case node_errdefer_statement:
             AstRenderer_beginSection(r, "errdefer_statement");
+            astp(r, "payload: %s", Buffer_staticZ(n->data.errdefer_statement.payload_name));
+            AstRenderer_render(r, n->data.errdefer_statement.block_expr);
             AstRenderer_endSection(r);
             break;
 
         case node_unary_expr:
+            if (n->data.unary_expr.ops_len == 0) {
+                AstRenderer_render(r, n->data.unary_expr.expr);
+                return;
+            }
+
             AstRenderer_beginSection(r, "unary_expr");
             if (n->data.unary_expr.ops_len > 0) {
                 AstRenderer_beginSection(r, "ops");
                 for (uint32_t i = 0; i < n->data.unary_expr.ops_len; i++) {
-                    astp(r, "%d\n", n->data.unary_expr.ops[i]);
+                    astp(r, "%d", n->data.unary_expr.ops[i]);
                 }
                 AstRenderer_endSection(r);
             }
@@ -180,6 +214,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_binary_expr:
             AstRenderer_beginSection(r, "binary_expr");
+            astp(r, "op: %d", n->data.binary_expr.op);
+            AstRenderer_render(r, n->data.binary_expr.lhs);
+            AstRenderer_render(r, n->data.binary_expr.rhs);
             AstRenderer_endSection(r);
             break;
 
@@ -282,6 +319,8 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_field_init:
             AstRenderer_beginSection(r, "field_init");
+            astp(r, "name: %s", Buffer_staticZ(n->data.field_init.name));
+            AstRenderer_render(r, n->data.field_init.expr);
             AstRenderer_endSection(r);
             break;
 
@@ -344,28 +383,51 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_beginSection(r, "if_statement");
             AstRenderer_render(r, n->data.if_statement.condition);
             AstRenderer_render(r, n->data.if_statement.block);
-            astp(r, "payload_name:", n->data.if_statement.else_payload_name);
+            if (n->data.if_statement.else_payload_name.len != 0) {
+                astp(r, "payload_name:", n->data.if_statement.else_payload_name);
+            }
             AstRenderer_render(r, n->data.if_statement.else_statement);
             AstRenderer_endSection(r);
             break;
 
         case node_labeled_statement:
+            if (n->data.labeled_statement.label.len == 0) {
+                AstRenderer_render(r, n->data.labeled_statement.statement);
+                return;
+            }
+
             AstRenderer_beginSection(r, "labeled_statement");
+            astp(r, "label: %s", Buffer_staticZ(n->data.labeled_statement.label));
+            AstRenderer_render(r, n->data.labeled_statement.statement);
             AstRenderer_endSection(r);
             break;
 
         case node_if_expr:
             AstRenderer_beginSection(r, "if_expr");
+            AstRenderer_render(r, n->data.if_expr.condition);
+            AstRenderer_render(r, n->data.if_expr.expr);
+            if (n->data.if_expr.else_payload_name.len != 0) {
+                astp(r, "else_payload_name: %s", Buffer_staticZ(n->data.if_expr.else_payload_name));
+            }
+            AstRenderer_render(r, n->data.if_expr.else_payload_expr);
             AstRenderer_endSection(r);
             break;
 
         case node_var_decl_statement:
             AstRenderer_beginSection(r, "var_decl_statement");
+            AstRenderer_render(r, n->data.var_decl_statement.var_decl);
+            AstRenderer_render(r, n->data.var_decl_statement.expr);
+            for (uint32_t i = 0; i < n->data.var_decl_statement.var_decl_additional_len; i++) {
+                AstRenderer_render(r, n->data.var_decl_statement.var_decl_additional[i]);
+            }
             AstRenderer_endSection(r);
             break;
 
         case node_single_assign_expr:
             AstRenderer_beginSection(r, "single_assign_expr");
+            astp(r, "op: %s", TokenTag_name(n->data.single_assign_expr.assign_op));
+            AstRenderer_render(r, n->data.single_assign_expr.lhs);
+            AstRenderer_render(r, n->data.single_assign_expr.rhs);
             AstRenderer_endSection(r);
             break;
 
@@ -405,7 +467,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             break;
 
         case node_container_decl_auto:
-            AstRenderer_beginSection(r, "prefix_type_op_optional");
+            AstRenderer_beginSection(r, "node_container_decl_auto");
+            AstRenderer_render(r, n->data.container_decl_auto.type);
+            AstRenderer_render(r, n->data.container_decl_auto.members);
             AstRenderer_endSection(r);
             break;
 
@@ -421,16 +485,29 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_prefix_type_op_slice:
             AstRenderer_beginSection(r, "prefix_type_op_slice");
+            AstRenderer_render(r, n->data.prefix_type_slice.addrspace);
+            AstRenderer_render(r, n->data.prefix_type_slice.bytealign);
+            astp(r, "is_allowzero: %s", boolstring((n->data.prefix_type_slice.modifiers & pointer_modifier_allowzero) != 0));
+            astp(r, "is_const: %s", boolstring((n->data.prefix_type_slice.modifiers & pointer_modifier_const) != 0));
+            astp(r, "is_volatile: %s", boolstring((n->data.prefix_type_slice.modifiers & pointer_modifier_volatile) != 0));
+            AstRenderer_render(r, n->data.prefix_type_slice.slice);
             AstRenderer_endSection(r);
             break;
 
         case node_prefix_type_op_ptr:
             AstRenderer_beginSection(r, "prefix_type_op_ptr");
+            AstRenderer_render(r, n->data.prefix_type_ptr.addrspace);
+            AstRenderer_render(r, n->data.prefix_type_ptr.align);
+            astp(r, "is_allowzero: %s", boolstring((n->data.prefix_type_ptr.modifiers & pointer_modifier_allowzero) != 0));
+            astp(r, "is_const: %s", boolstring((n->data.prefix_type_ptr.modifiers & pointer_modifier_const) != 0));
+            astp(r, "is_volatile: %s", boolstring((n->data.prefix_type_ptr.modifiers & pointer_modifier_volatile) != 0));
+            AstRenderer_render(r, n->data.prefix_type_ptr.ptr);
             AstRenderer_endSection(r);
             break;
 
         case node_prefix_type_op_array:
             AstRenderer_beginSection(r, "prefix_type_op_array");
+            AstRenderer_render(r, n->data.prefix_type_array.array);
             AstRenderer_endSection(r);
             break;
 
@@ -455,27 +532,38 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             break;
 
         case node_suffix_type_op_slice:
-            AstRenderer_beginSection(r, "suffix_type_op_slice");
+            AstRenderer_beginSection(r, "suffix_slice");
+            AstRenderer_render(r, n->data.suffix_type_op_slice.start_expr);
+            AstRenderer_render(r, n->data.suffix_type_op_slice.end_expr);
+            AstRenderer_render(r, n->data.suffix_type_op_slice.sentinel_expr);
             AstRenderer_endSection(r);
             break;
 
         case node_suffix_type_op_named_access:
-            AstRenderer_beginSection(r, "suffix_type_op_named_access");
+            AstRenderer_beginSection(r, "suffix_member");
+            astp(r, ".%s", Buffer_staticZ(n->data.suffix_type_op_named_access.name));
             AstRenderer_endSection(r);
             break;
 
         case node_suffix_type_op_deref:
-            AstRenderer_beginSection(r, "suffix_type_op_deref");
+            AstRenderer_beginSection(r, "suffix_deref");
+            astp(r, ".*");
             AstRenderer_endSection(r);
             break;
 
         case node_suffix_type_op_assert_maybe:
             AstRenderer_beginSection(r, "suffix_type_op_assert_maybe");
+            astp(r, ".?");
             AstRenderer_endSection(r);
             break;
 
         case node_fn_call_arguments:
+            if (n->data.fn_call_arguments.exprs_len == 0) return;
+
             AstRenderer_beginSection(r, "fn_call_arguments");
+            for (uint32_t i = 0; i < n->data.fn_call_arguments.exprs_len; i++) {
+                AstRenderer_render(r, n->data.fn_call_arguments.exprs[i]);
+            }
             AstRenderer_endSection(r);
             break;
 
@@ -491,11 +579,14 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_if_prefix:
             AstRenderer_beginSection(r, "if_prefix");
+            AstRenderer_render(r, n->data.if_prefix.condition);
+            AstRenderer_render(r, n->data.if_prefix.ptr_payload);
             AstRenderer_endSection(r);
             break;
 
         case node_payload:
             AstRenderer_beginSection(r, "payload");
+            astp(r, "name: %s%s", n->data.payload.is_pointer ? "*" : "", Buffer_staticZ(n->data.payload.name));
             AstRenderer_endSection(r);
             break;
 
@@ -526,6 +617,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_container_decl:
             AstRenderer_beginSection(r, "node_container_decl");
+            astp(r, "is_extern: %s", boolstring(n->data.container_decl.is_extern));
+            astp(r, "is_packed: %s", boolstring(n->data.container_decl.is_packed));
+            AstRenderer_render(r, n->data.container_decl.container_decl);
             AstRenderer_endSection(r);
             break;
 
@@ -550,7 +644,12 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             break;
 
         case node_init_list_field:
+            if (n->data.init_list_field.nodes_len == 0) return;
+
             AstRenderer_beginSection(r, "node_init_list_field");
+            for (uint32_t i = 0; i < n->data.init_list_field.nodes_len; i++) {
+                AstRenderer_render(r, n->data.init_list_field.nodes[i]);
+            }
             AstRenderer_endSection(r);
             break;
 
@@ -615,7 +714,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 __attribute__((unused))
 static void Parser_debugNode(Parser *p, Node *n, const char *prefix)
 {
-    std_printf("|%s\n", prefix);
+    std_printf("@%s\n", prefix);
     AstRenderer r;
     AstRenderer_init(&r, p);
     AstRenderer_render(&r, n);
