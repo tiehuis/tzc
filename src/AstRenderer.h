@@ -41,7 +41,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_container_field:
             AstRenderer_beginSection(r, "node_container_field");
-            astp(r, "name: %s", Buffer_staticZ(n->data.container_field.name));
+            astp(r, "name: "PRIb, Buffer(n->data.container_field.name));
             astp(r, "is_comptime: %s", boolstring(n->data.container_field.is_comptime));
             AstRenderer_render(r, n->data.container_field.expr);
             AstRenderer_render(r, n->data.container_field.type_expr);
@@ -50,7 +50,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_test_decl:
             AstRenderer_beginSection(r, "test_decl");
-            astp(r, "name: %s", Buffer_staticZ(n->data.test_decl.name));
+            astp(r, "name: "PRIb, Buffer(n->data.test_decl.name));
             astp(r, "is_ident: %s", boolstring(n->data.test_decl.is_ident));
             AstRenderer_render(r, n->data.test_decl.block);
             AstRenderer_endSection(r);
@@ -64,7 +64,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_var_decl_proto:
             AstRenderer_beginSection(r, "var_decl_proto");
-            astp(r, "name: %s", Buffer_staticZ(n->data.var_decl_proto.name));
+            astp(r, "name: "PRIb, Buffer(n->data.var_decl_proto.name));
             astp(r, "is_const: %s", boolstring(n->data.var_decl_proto.is_const));
             AstRenderer_render(r, n->data.var_decl_proto.type);
             AstRenderer_endSection(r);
@@ -100,7 +100,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_fn_proto:
             AstRenderer_beginSection(r, "fn_proto");
-            astp(r, "name: %s", Buffer_staticZ(n->data.fn_proto.name));
+            astp(r, "name: "PRIb, Buffer(n->data.fn_proto.name));
             AstRenderer_render(r, n->data.fn_proto.params);
             AstRenderer_render(r, n->data.fn_proto.return_type);
             AstRenderer_endSection(r);
@@ -119,7 +119,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_param_decl:
             AstRenderer_beginSection(r, "param_decl");
-            astp(r, "name: %s", Buffer_staticZ(n->data.param_decl.identifier));
+            astp(r, "name: "PRIb, Buffer(n->data.param_decl.identifier));
             astp(r, "is_varargs: %s", boolstring(n->data.param_decl.is_varargs));
             if (n->data.param_decl.modifier != token_invalid) {
                 astp(r, "modifier: %s", TokenTag_name(n->data.param_decl.modifier));
@@ -189,7 +189,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_errdefer_statement:
             AstRenderer_beginSection(r, "errdefer_statement");
-            astp(r, "payload: %s", Buffer_staticZ(n->data.errdefer_statement.payload_name));
+            astp(r, "payload: "PRIb, Buffer(n->data.errdefer_statement.payload_name));
             AstRenderer_render(r, n->data.errdefer_statement.block_expr);
             AstRenderer_endSection(r);
             break;
@@ -255,12 +255,12 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_beginSection(r, "primary_type_expr");
             switch (n->data.primary_type_expr.tag) {
                 case node_primary_type_builtin:
-                    astp(r, "builtin: %s", Buffer_staticZ(n->data.primary_type_expr.data.raw));
+                    astp(r, "builtin: "PRIb, Buffer(n->data.primary_type_expr.data.raw));
                     AstRenderer_render(r, n->data.primary_type_expr.data.node);
                     break;
 
                 case node_primary_type_identifier:
-                    astp(r, "identifier: %s", Buffer_staticZ(n->data.primary_type_expr.data.raw));
+                    astp(r, "identifier: "PRIb, Buffer(n->data.primary_type_expr.data.raw));
                     break;
 
                 case node_primary_type_char_literal:
@@ -268,7 +268,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
                 case node_primary_type_number_literal:
                 case node_primary_type_error:
                 case node_primary_type_string_literal:
-                    astp(r, "literal: %s", Buffer_staticZ(n->data.primary_type_expr.data.raw));
+                    astp(r, "literal: "PRIb, Buffer(n->data.primary_type_expr.data.raw));
                     break;
 
                 case node_primary_type_container_decl:
@@ -314,12 +314,15 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_for_args:
             AstRenderer_beginSection(r, "for_args");
+            for (uint32_t i = 0; i < n->data.for_args.args_len; i++) {
+                AstRenderer_render(r, n->data.for_args.args[i]);
+            }
             AstRenderer_endSection(r);
             break;
 
         case node_field_init:
             AstRenderer_beginSection(r, "field_init");
-            astp(r, "name: %s", Buffer_staticZ(n->data.field_init.name));
+            astp(r, "name: "PRIb, Buffer(n->data.field_init.name));
             AstRenderer_render(r, n->data.field_init.expr);
             AstRenderer_endSection(r);
             break;
@@ -371,11 +374,21 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_while_statement:
             AstRenderer_beginSection(r, "while_statement");
+            AstRenderer_render(r, n->data.while_statement.condition);
+            AstRenderer_render(r, n->data.while_statement.block);
+            if (n->data.while_statement.else_payload_name.len != 0) {
+                astp(r, "else_payload_name: "PRIb, Buffer(n->data.while_statement.else_payload_name));
+            }
+            AstRenderer_render(r, n->data.while_statement.else_statement);
+            AstRenderer_endSection(r);
             AstRenderer_endSection(r);
             break;
 
         case node_for_statement:
             AstRenderer_beginSection(r, "for_statement");
+            AstRenderer_render(r, n->data.for_statement.condition);
+            AstRenderer_render(r, n->data.for_statement.block);
+            AstRenderer_render(r, n->data.for_statement.else_statement);
             AstRenderer_endSection(r);
             break;
 
@@ -397,7 +410,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             }
 
             AstRenderer_beginSection(r, "labeled_statement");
-            astp(r, "label: %s", Buffer_staticZ(n->data.labeled_statement.label));
+            astp(r, "label: "PRIb, Buffer(n->data.labeled_statement.label));
             AstRenderer_render(r, n->data.labeled_statement.statement);
             AstRenderer_endSection(r);
             break;
@@ -407,7 +420,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             AstRenderer_render(r, n->data.if_expr.condition);
             AstRenderer_render(r, n->data.if_expr.expr);
             if (n->data.if_expr.else_payload_name.len != 0) {
-                astp(r, "else_payload_name: %s", Buffer_staticZ(n->data.if_expr.else_payload_name));
+                astp(r, "else_payload_name: "PRIb, Buffer(n->data.if_expr.else_payload_name));
             }
             AstRenderer_render(r, n->data.if_expr.else_payload_expr);
             AstRenderer_endSection(r);
@@ -462,7 +475,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
             break;
 
         case node_loop_statement:
-            AstRenderer_beginSection(r, "container_decl_auto");
+            AstRenderer_beginSection(r, "node_loop_statement");
+            astp(r, "is_inline: %s", boolstring(n->data.loop_statement.is_inline));
+            AstRenderer_render(r, n->data.loop_statement.statement);
             AstRenderer_endSection(r);
             break;
 
@@ -541,7 +556,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_suffix_type_op_named_access:
             AstRenderer_beginSection(r, "suffix_member");
-            astp(r, ".%s", Buffer_staticZ(n->data.suffix_type_op_named_access.name));
+            astp(r, "."PRIb, Buffer(n->data.suffix_type_op_named_access.name));
             AstRenderer_endSection(r);
             break;
 
@@ -569,11 +584,16 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_for_prefix:
             AstRenderer_beginSection(r, "for_prefix");
+            AstRenderer_render(r, n->data.for_prefix.for_args);
+            AstRenderer_render(r, n->data.for_prefix.ptr_list_payload);
             AstRenderer_endSection(r);
             break;
 
         case node_while_prefix:
             AstRenderer_beginSection(r, "while_prefix");
+            AstRenderer_render(r, n->data.while_prefix.condition);
+            AstRenderer_render(r, n->data.while_prefix.ptr_payload);
+            AstRenderer_render(r, n->data.while_prefix.while_continue_expr);
             AstRenderer_endSection(r);
             break;
 
@@ -586,7 +606,7 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_payload:
             AstRenderer_beginSection(r, "payload");
-            astp(r, "name: %s%s", n->data.payload.is_pointer ? "*" : "", Buffer_staticZ(n->data.payload.name));
+            astp(r, "name: %s"PRIb, n->data.payload.is_pointer ? "*" : "", Buffer(n->data.payload.name));
             AstRenderer_endSection(r);
             break;
 
@@ -597,6 +617,9 @@ static void AstRenderer_render(AstRenderer *r, Node *n)
 
         case node_payload_list:
             AstRenderer_beginSection(r, "payload_list");
+            for (uint32_t i = 0; i < n->data.payload_list.payloads_len; i++) {
+                AstRenderer_render(r, n->data.payload_list.payloads[i]);
+            }
             AstRenderer_endSection(r);
             break;
 

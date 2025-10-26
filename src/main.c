@@ -69,7 +69,7 @@ int main(int argc, char **argv)
     if (emit_tokens) {
         for (uint32_t i = 0; i < tokens.len; i++) {
             Token token = tokens.data[i];
-            std_printf("|%u: %s: %s\n", i, TokenTag_name(token.tag), Buffer_staticZ(Buffer_slice(source, token.loc.start, token.loc.end)));
+            std_printf("|%u: %s: "PRIb"\n", i, TokenTag_name(token.tag), Buffer(Buffer_slice(source, token.loc.start, token.loc.end)));
         }
         return 0;
     }

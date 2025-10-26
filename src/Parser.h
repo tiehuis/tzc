@@ -1038,7 +1038,7 @@ static void _Noreturn Parser_fail0(Parser *p, int line_no, const char *fmt, ...)
     const char *e = p->source.data + current.loc.end;
     while (*e != '\n' && *e != 0) e++;
     Buffer line = Buffer_slice(p->source, s - p->source.data, e - p->source.data);
-    std_printf("%s\n", Buffer_staticZ(line));
+    std_printf(PRIb"\n", Buffer(line));
     if (offset > 1) for (size_t i = 0; i < offset - 1; i++) std_printf(" ");
     std_printf("^\n");
 
@@ -1072,7 +1072,7 @@ static void Parser_dump0(Parser *p, const char *function)
 {
     Token t = p->tokens[p->index];
     Buffer token = Buffer_slice(p->source, t.loc.start, t.loc.end);
-    std_printf("%d:%s:%s:%s\n", p->index, function, TokenTag_name(t.tag), Buffer_staticZ(token));
+    std_printf("%d:%s:%s:"PRIb"\n", p->index, function, TokenTag_name(t.tag), Buffer(token));
 }
 
 #define Parser_expect(p, tag) Parser_expect0(p, __LINE__, __func__, tag)

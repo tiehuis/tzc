@@ -38,8 +38,7 @@ static void CodeGen_expect0(CodeGen *cg, bool condition, const char *function, i
 }
 
 #define emit(fmt, ...) std_fprintf(cg->out, fmt, ## __VA_ARGS__)
-#define emitl(fmt, ...) std_fprintf(cg->out, fmt "\n", ## __VA_ARGS__)
-#define emitt() std_fprintf(cg->out, "%*c", 4 * cg->indent, ' ');
+#define indent() std_fprintf(cg->out, "%*c", 4 * cg->indent, ' ');
 
 static size_t std_strlen(const char *s)
 {
@@ -178,15 +177,15 @@ static void CodeGen_genPrimaryTypeExpr(CodeGen *cg, NodeDataPrimaryTypeExpr prim
     switch (primary_type_expr.tag) {
         case node_primary_type_number_literal:
         case node_primary_type_identifier:
-            emit("%s", Buffer_staticZ(primary_type_expr.data.raw));
+            emit(PRIb, Buffer(primary_type_expr.data.raw));
             break;
 
         case node_primary_type_char_literal:
-            emit("'%s'", Buffer_staticZ(primary_type_expr.data.raw));
+            emit("'"PRIb"'", Buffer(primary_type_expr.data.raw));
             break;
 
         case node_primary_type_string_literal:
-            emit("%s", Buffer_staticZ(primary_type_expr.data.raw));
+            emit(PRIb, Buffer(primary_type_expr.data.raw));
             break;
 
         case node_primary_type_unreachable:
@@ -271,7 +270,7 @@ static void CodeGen_genPrimaryExpr(CodeGen *cg, Node *expr)
             CodeGen_fail(cg, "unimplemented resume_expr");
 
         case node_return_expr:
-            emitt();
+            indent();
             emit("return ");
             CodeGen_genExpr(cg, expr->data.return_expr);
             emit(";\n");
@@ -425,6 +424,86 @@ static void CodeGen_genExpr(CodeGen *cg, Node *expr)
             CodeGen_unreachable(cg);
     }
 }
+static void CodeGen_genVarDecl(CodeGen *cg, NodeDataVarDeclStatement var_decl)
+{
+    CodeGen_expect2(cg, var_decl.var_decl_additional_len == 0, "multi-assign var_decl not supported");
+
+    CodeGen_expect(cg, var_decl.var_decl->tag == node_var_decl_proto);
+    NodeDataVarDeclProto var_proto = var_decl.var_decl->data.var_decl_proto;
+
+    indent();
+    emit(PRIb" "PRIb" =", Buffer(Sema_evalTypeName(cg, var_proto.type)), Buffer(var_proto.name));
+    CodeGen_genExpr(cg, var_decl.expr);
+    emit(";\n");
+}
+
+static void CodeGen_genBlock(CodeGen *cg, NodeDataBlock block);
+static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr);
+
+static void CodeGen_genLoopStatement(CodeGen *cg, NodeDataLoopStatement loop)
+{
+    CodeGen_expect2(cg, loop.is_inline == false, "inline loop's are unsupported (need comptime unrolling)");
+
+    switch (loop.statement->tag) {
+        case node_while_statement:
+        {
+            NodeDataWhileStatement while_stmt = loop.statement->data.while_statement;
+            NodeDataWhilePrefix while_prefix = while_stmt.condition->data.while_prefix;
+            CodeGen_expect(cg, while_prefix.ptr_payload == NULL);
+            CodeGen_expect(cg, while_stmt.else_statement == NULL);
+
+            indent();
+            emit("while (");
+            CodeGen_genExpr(cg, while_prefix.condition);
+            emit(") {\n");
+            indent();
+            CodeGen_genBlock(cg, while_stmt.block->data.block);
+            indent();
+            CodeGen_genStatementExpr(cg, while_prefix.while_continue_expr);
+            indent();
+            emit("}\n");
+        }
+        break;
+
+        case node_for_statement:
+        {
+            NodeDataForStatement for_stmt = loop.statement->data.for_statement;
+            NodeDataForPrefix for_prefix = for_stmt.condition->data.for_prefix;
+            CodeGen_expect(cg, for_stmt.else_statement == NULL);
+            NodeDataForArgs for_args = for_prefix.for_args->data.for_args;
+            CodeGen_expect(cg, for_args.args_len == 1);
+
+            NodeDataPayloadList payloads = for_prefix.ptr_list_payload->data.payload_list;
+
+            indent();
+            emit("for (");
+            for (uint32_t i = 0; i < for_args.args_len; i++) {
+                NodeDataForItem for_item = for_args.args[i]->data.for_item;
+                CodeGen_expect2(cg, for_item.is_range, "non-range for arguments not supported");
+
+                if (i < payloads.payloads_len) {
+                    NodeDataPayload payload = payloads.payloads[i]->data.payload;
+                    emit("int "PRIb" = ", Buffer(payload.name));
+                    CodeGen_genExpr(cg, for_item.for_start);
+                    emit("; "PRIb" != ", Buffer(payload.name));
+                    CodeGen_genExpr(cg, for_item.for_end);
+                    emit("; "PRIb"++) {\n", Buffer(payload.name));
+                } else {
+                    emit(";;) {\n");
+                }
+            }
+
+            indent();
+            CodeGen_genBlock(cg, for_stmt.block->data.block);
+            indent();
+            emit("}\n");
+        }
+        break;
+
+        default:
+            CodeGen_unreachable(cg);
+    }
+}
 
 static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr)
 {
@@ -448,27 +527,59 @@ static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr)
             CodeGen_fail(cg, "unimplemented if_statement");
 
         case node_labeled_statement:
-            CodeGen_fail(cg, "unimplemented labeled_statement");
+        {
+            NodeDataLabeledStatement labeled_stmt = statement_or_expr->data.labeled_statement;
+            CodeGen_expect(cg, labeled_stmt.label.len == 0);
+            switch (labeled_stmt.statement->tag) {
+                case node_loop_statement:
+                    CodeGen_genLoopStatement(cg, labeled_stmt.statement->data.loop_statement);
+                    break;
+                case node_block:
+                    CodeGen_unreachable(cg);
+                case node_switch_expr:
+                    CodeGen_unreachable(cg);
+
+                default:
+                    CodeGen_unreachable(cg);
+            }
+        }
+        break;
 
         case node_var_decl_statement:
-            CodeGen_fail(cg, "unimplemented var_decl_statement");
+            CodeGen_genVarDecl(cg, statement_or_expr->data.var_decl_statement);
+            break;
 
         case node_single_assign_expr:
         {
             NodeDataSingleAssignExpr e = statement_or_expr->data.single_assign_expr;
-            CodeGen_expect2(cg, e.assign_op == token_equal, "only standard assign supported");
             CodeGen_expect(cg, e.lhs->tag == node_unary_expr);
 
             Buffer name = Sema_evalTypeName(cg, e.lhs->data.unary_expr.expr);
             if (!Buffer_eql(name, "_")) {
-                emitt();
+                CodeGen_expect2(cg, e.assign_op == token_equal, "only standard assign supported for discard");
+                indent();
                 emit("(void)");
                 CodeGen_genExpr(cg, e.rhs);
-                emitl(";");
+                emit(";\n");
                 return;
             }
 
-            CodeGen_fail(cg, "unimplemented single_assign_expr");
+            indent();
+            emit(PRIb" ", Buffer(name));
+            switch (e.assign_op) {
+                case token_equal:
+                    emit("=");
+                    break;
+                case token_plus_equal:
+                    emit("+=");
+                    break;
+                default:
+                    CodeGen_unreachable(cg);
+            }
+            emit(" ");
+            CodeGen_genExpr(cg, e.rhs);
+            emit(";\n");
+            return;
         }
 
         default:
@@ -479,8 +590,7 @@ static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr)
 static void CodeGen_genFunctionProto(CodeGen *cg, NodeDataFnProto fn_proto, DeclModifiers modifiers, bool is_static)
 {
     if ((modifiers & token_keyword_extern) != 0 && is_static) emit("static ");
-    emit("%s ", Buffer_staticZ(Sema_evalTypeName(cg, fn_proto.return_type)));
-    emit("%s", Buffer_staticZ(fn_proto.name));
+    emit(PRIb" "PRIb, Buffer(Sema_evalTypeName(cg, fn_proto.return_type)), Buffer(fn_proto.name));
 
     if (!fn_proto.params) {
         emit("(void)");
@@ -497,11 +607,18 @@ static void CodeGen_genFunctionProto(CodeGen *cg, NodeDataFnProto fn_proto, Decl
             } else {
                 Buffer name = Sema_evalTypeName(cg, decl.type);
                 CodeGen_expect(cg, name.len != 0);
-                emit("%s", Buffer_staticZ(name));
+                emit(PRIb, Buffer(name));
             }
             if (i != decllist.params_len - 1) emit(", ");
         }
         emit(")");
+    }
+}
+
+static void CodeGen_genBlock(CodeGen *cg, NodeDataBlock block)
+{
+    for (uint32_t i = 0; i < block.statements_len; i++) {
+        CodeGen_genStatementExpr(cg, block.statements[i]);
     }
 }
 
@@ -515,10 +632,7 @@ static void CodeGen_genFunction(CodeGen *cg, NodeDataDeclFn fn, bool is_static)
     cg->indent++;
 
     CodeGen_expect(cg, fn.block->tag == node_block);
-    NodeDataBlock block = fn.block->data.block;
-    for (uint32_t i = 0; i < block.statements_len; i++) {
-        CodeGen_genStatementExpr(cg, block.statements[i]);
-    }
+    CodeGen_genBlock(cg, fn.block->data.block);
 
     cg->indent--;
     emit("}\n\n");
@@ -566,19 +680,19 @@ static void CodeGen_genContainerMembers(CodeGen *cg, NodeDataContainerMembers me
 
 static void CodeGen_genPrologue(CodeGen *cg)
 {
-    emitl("/* Generated by tzc */");
+    emit("/* Generated by tzc */\n");
 #ifdef USE_ZIG_H
-    emitl("");
-    emitl("#define ZIG_TARGET_MAX_INT_ALIGNMENT 16");
-    emitl("/* zig.h begin */");
+    emit("\n");
+    emit("#define ZIG_TARGET_MAX_INT_ALIGNMENT 16\n");
+    emit("/* zig.h begin */\n");
     std_writeFile(cg->zig_h, cg->zig_h_len, 1, cg->out);
-    emitl("/* zig.h end */");
-    emitl("");
+    emit("/* zig.h end */\n");
+    emit("\n");
 #else
-    emitl("#include <stddef.h>");
-    emitl("#include <stdbool.h>");
-    emitl("#include <stdint.h>");
-    emitl("");
+    emit("#include <stddef.h>\n");
+    emit("#include <stdbool.h>\n");
+    emit("#include <stdint.h>\n");
+    emit("\n");
 #endif
 }
 
@@ -594,11 +708,11 @@ void CodeGen_genForwardDecls(CodeGen *cg, NodeDataContainerMembers members)
                 CodeGen_expect(cg, fn.fn_proto->tag == node_fn_proto);
                 NodeDataFnProto fn_proto = fn.fn_proto->data.fn_proto;
                 CodeGen_genFunctionProto(cg, fn_proto, fn.modifiers, !top_level_decl.is_pub);
-                emitl(";");
+                emit(";\n");
             }
         }
     }
-    emitl("");
+    emit("\n");
 }
 
 static void CodeGen_gen(CodeGen *cg, Node *n)
@@ -610,5 +724,4 @@ static void CodeGen_gen(CodeGen *cg, Node *n)
 }
 
 #undef emit
-#undef emitl
-#undef emitt
+#undef indent

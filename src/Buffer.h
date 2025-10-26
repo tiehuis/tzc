@@ -3,6 +3,10 @@ typedef struct Buffer {
     uint32_t len;
 } Buffer;
 
+// e.g. printf("Buffer: "PRIb, Buffer(b));
+#define PRIb "%.*s"
+#define Buffer(b) (b).len, (b).data
+
 static Buffer Buffer_empty(void)
 {
     return (Buffer){ .data = (void*)0xaaaaaaaa, .len = 0 };
@@ -20,16 +24,6 @@ static int Buffer_eql(Buffer b, const char *s)
         if (d != 0) return d;
     }
     return s[b.len] != 0;
-}
-
-static const char* Buffer_staticZ(Buffer b)
-{
-    static char s[1024];
-    for (size_t i = 0; i < b.len; i++) {
-        s[i] = b.data[i];
-    }
-    s[b.len] = 0;
-    return s;
 }
 
 static Buffer Buffer_fromFile(const char *filename)
