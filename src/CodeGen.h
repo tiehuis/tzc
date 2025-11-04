@@ -23,10 +23,17 @@ static void CodeGen_init(CodeGen *cg, Parser *p, const char *output_filename, co
 
 #define CodeGen_unreachable(cg) CodeGen_fail0(cg, __func__, __LINE__, "unreachable")
 #define CodeGen_fail(cg, message, ...) CodeGen_fail0(cg, __func__, __LINE__, message)
+#define CodeGen_unsupportedTag(cg, tag) CodeGen_fail1(cg, __func__, __LINE__, tag)
 static _Noreturn void CodeGen_fail0(CodeGen *cg, const char *function, int line, const char *message)
 {
     (void) cg;
     std_printf("%d:lowering failed: %s: %s\n", line, function, message);
+    std_exit(1);
+}
+static _Noreturn void CodeGen_fail1(CodeGen *cg, const char *function, int line, NodeTag tag)
+{
+    (void) cg;
+    std_printf("%d:lowering failed: %s: unsupported node tag %s\n", line, function, NodeTag_name(tag));
     std_exit(1);
 }
 
@@ -107,7 +114,8 @@ static Buffer Sema_evalTypeName0(CodeGen *cg, Node *n)
         {
             Buffer name = Sema_evalTypeName0(cg, n->data.type_expr.type_expr);
             for (uint32_t i = 0; i < n->data.type_expr.prefix_type_ops_len; i++) {
-                switch (n->data.type_expr.prefix_type_ops[i]->tag) {
+                NodeTag tag = n->data.type_expr.prefix_type_ops[i]->tag;
+                switch (tag) {
                     case node_prefix_type_op_ptr:
                     {
                         CharArray s;
@@ -137,7 +145,7 @@ static Buffer Sema_evalTypeName0(CodeGen *cg, Node *n)
                     }
 
                     default:
-                        CodeGen_unreachable(cg);
+                        CodeGen_unsupportedTag(cg, tag);
                 }
             }
             return name;
@@ -152,10 +160,10 @@ static Buffer Sema_evalTypeName0(CodeGen *cg, Node *n)
                 case node_primary_type_identifier:
                     return Sema_resolveTypeName(cg, n->data.primary_type_expr.data.raw);
                 default:
-                    std_panic("cannot evaluate type name for node: %s\n", NodePrimaryTypeTag_name(n->data.primary_type_expr.tag));
+                    CodeGen_fail(cg, "unsupported primary type expr tag");
             }
         default:
-            CodeGen_unreachable(cg);
+            CodeGen_unsupportedTag(cg, n->tag);
     }
 }
 
@@ -203,7 +211,7 @@ static void CodeGen_genPrimaryTypeExpr(CodeGen *cg, NodeDataPrimaryTypeExpr prim
         case node_primary_type_comptime_type_expr:
         case node_primary_type_error:
         case node_primary_type_anyframe:
-            CodeGen_fail(cg, "unimplemented tag: %s", NodeTag_name(primary_type_expr.tag));
+            CodeGen_fail(cg, "unsupported primary type expr tag");
 
         default:
             CodeGen_unreachable(cg);
@@ -290,7 +298,7 @@ static void CodeGen_genPrimaryExpr(CodeGen *cg, Node *expr)
             break;
 
         default:
-            CodeGen_unreachable(cg);
+            CodeGen_unsupportedTag(cg, expr->tag);
     }
 }
 
@@ -421,7 +429,7 @@ static void CodeGen_genExpr(CodeGen *cg, Node *expr)
             break;
 
         default:
-            CodeGen_unreachable(cg);
+            CodeGen_unsupportedTag(cg, expr->tag);
     }
 }
 static void CodeGen_genVarDecl(CodeGen *cg, NodeDataVarDeclStatement var_decl)
@@ -501,7 +509,7 @@ static void CodeGen_genLoopStatement(CodeGen *cg, NodeDataLoopStatement loop)
         break;
 
         default:
-            CodeGen_unreachable(cg);
+            CodeGen_unsupportedTag(cg, loop.statement->tag);
     }
 }
 
@@ -524,7 +532,33 @@ static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr)
             CodeGen_fail(cg, "unimplemented errdefer_statement");
 
         case node_if_statement:
-            CodeGen_fail(cg, "unimplemented if_statement");
+        {
+            NodeDataIfStatement if_stmt = statement_or_expr->data.if_statement;
+
+            indent();
+            emit("if (");
+            CodeGen_expect(cg, if_stmt.condition->tag == node_if_prefix);
+            NodeDataIfPrefix if_prefix = if_stmt.condition->data.if_prefix;
+            CodeGen_expect2(cg, if_prefix.ptr_payload == NULL, "if payload unsupported");
+            CodeGen_genExpr(cg, if_prefix.condition);
+            emit(") {\n");
+            CodeGen_expect2(cg, if_stmt.block->tag == node_block, "unlabelled blocks only are supported");
+            cg->indent++;
+            CodeGen_genBlock(cg, if_stmt.block->data.block);
+            cg->indent--;
+
+            if (if_stmt.else_statement != NULL) {
+                indent();
+                emit("} else {\n");
+                cg->indent++;
+                CodeGen_genStatementExpr(cg, if_stmt.else_statement);
+                cg->indent--;
+            }
+
+            indent();
+            emit("}\n");
+        }
+        break;
 
         case node_labeled_statement:
         {
@@ -535,12 +569,12 @@ static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr)
                     CodeGen_genLoopStatement(cg, labeled_stmt.statement->data.loop_statement);
                     break;
                 case node_block:
-                    CodeGen_unreachable(cg);
+                    CodeGen_genBlock(cg, labeled_stmt.statement->data.block);
+                    break;
                 case node_switch_expr:
                     CodeGen_unreachable(cg);
-
                 default:
-                    CodeGen_unreachable(cg);
+                    CodeGen_unsupportedTag(cg, labeled_stmt.statement->tag);
             }
         }
         break;
@@ -583,6 +617,7 @@ static void CodeGen_genStatementExpr(CodeGen *cg, Node *statement_or_expr)
         }
 
         default:
+            // TODO: statement expression here may still require ';'
             CodeGen_genExpr(cg, statement_or_expr);
     }
 }
@@ -605,9 +640,13 @@ static void CodeGen_genFunctionProto(CodeGen *cg, NodeDataFnProto fn_proto, Decl
             if (decl.is_varargs) {
                 emit("...");
             } else {
-                Buffer name = Sema_evalTypeName(cg, decl.type);
-                CodeGen_expect(cg, name.len != 0);
-                emit(PRIb, Buffer(name));
+                Buffer typename = Sema_evalTypeName(cg, decl.type);
+                CodeGen_expect(cg, typename.len != 0);
+                emit(PRIb, Buffer(typename));
+
+                if (decl.identifier.len != 0) {
+                    emit(" "PRIb, Buffer(decl.identifier));
+                }
             }
             if (i != decllist.params_len - 1) emit(", ");
         }
@@ -649,7 +688,7 @@ static void CodeGen_genDecl(CodeGen *cg, NodeDataTopLevelDecl decl)
             CodeGen_fail(cg, "unimplemented node_decl_global_var_decl");
 
         default:
-            CodeGen_unreachable(cg);
+            CodeGen_unsupportedTag(cg, decl.decl->tag);
     }
 }
 
@@ -671,7 +710,7 @@ static void CodeGen_genContainerMembers(CodeGen *cg, NodeDataContainerMembers me
                 CodeGen_unreachable(cg);
 
             default:
-                CodeGen_unreachable(cg);
+                CodeGen_unsupportedTag(cg, n->tag);
         }
     }
 }
