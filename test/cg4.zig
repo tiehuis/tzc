@@ -5,4 +5,5 @@ pub fn main() c_int {
     while (i < 10) : (i += 1) {
         _ = printf("Hello %d!\n", i);
     }
+    return 0;
 }

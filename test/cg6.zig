@@ -9,4 +9,5 @@ fn tryAdd(a: u8, b: u8) u8 {
 
 pub fn main() c_int {
     _ = printf("%d\n", tryAdd(2, 3));
+    return 0;
 }

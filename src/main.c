@@ -3,8 +3,12 @@
 #include "Array.h"
 #include "Buffer.h"
 #include "Tokenizer.h"
+#include "ParserNode.h"
 #include "Parser.h"
 #include "AstRenderer.h"
+#include "Sema.h"
+#include "Ir.h"
+#include "IrRenderer.h"
 #include "CodeGen.h"
 
 bool strequal(const char *a, const char *b)
@@ -29,6 +33,7 @@ int main(int argc, char **argv)
     const char *lib_dir = NULL;
     bool emit_tokens = false;
     bool emit_ast = false;
+    bool emit_ir = false;
     bool no_emit_bin = false;
     bool report = false;
     for (int i = 1; i < argc; i++) {
@@ -45,6 +50,8 @@ int main(int argc, char **argv)
             emit_tokens = true;
         } else if (strequal(argv[i], "-ast")) {
             emit_ast = true;
+        } else if (strequal(argv[i], "-ir")) {
+            emit_ir = true;
         } else if (strequal(argv[i], "-report")) {
             report = true;
         } else if (strequal(argv[i], "-no-emit-bin")) {
@@ -78,11 +85,6 @@ int main(int argc, char **argv)
     Parser_init(&p, source, tokens.data, tokens.len);
     Node *root = Parser_parse(&p);
 
-    if (report) {
-        std_printf("tokens: size=%2.fKiB, count=%zu\n", (float) tokens.len * sizeof(Token) / 1024, tokens.len);
-        std_printf(" nodes: size=%2.fKiB\n", (float) p.nodes_count * sizeof(Node) / 1024);
-    }
-
     if (emit_ast) {
         AstRenderer r;
         AstRenderer_init(&r, &p);
@@ -90,9 +92,26 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    Ir ir;
+    Ir_init(&ir);
+    IrProgram *ir_p = Ir_lower(&ir, root);
+
+    if (emit_ir) {
+        IrRenderer r;
+        IrRenderer_init(&r);
+        IrRenderer_render(&r, ir_p);
+        return 0;
+    }
+
+    if (report) {
+        std_printf("tokens: size=%2.fKiB, count=%zu\n", (float) tokens.len * sizeof(Token) / 1024, tokens.len);
+        std_printf(" nodes: size=%2.fKiB, count=%zu\n", (float) p.nodes_count * sizeof(Node) / 1024, p.nodes_count);
+        std_printf("    ir: size=%2.fKiB, count=%zu\n", (float) ir.ir_count * sizeof(IrInst) / 1024, ir.ir_count);
+    }
+
     if (!no_emit_bin) {
         CodeGen cg;
-        CodeGen_init(&cg, &p, out_filename, lib_dir);
-        CodeGen_gen(&cg, root);
+        CodeGen_init(&cg, out_filename, lib_dir);
+        CodeGen_gen(&cg, ir_p);
     }
 }

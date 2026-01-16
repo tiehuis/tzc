@@ -11,39 +11,9 @@ void _Noreturn std_exit(int code)
     exit(code);
 }
 
-__attribute__((format(printf, 1, 2)))
-int std_printf(const char *fmt, ...)
+int std_vfprintf(void *fd, const char *fmt, va_list args)
 {
-    va_list args;
-    va_start(args, fmt);
-    int r = vprintf(fmt, args);
-    va_end(args);
-    return r;
-}
-
-__attribute__((format(printf, 2, 3)))
-int std_fprintf(void *fd, const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    int r = vfprintf(fd, fmt, args);
-    va_end(args);
-    return r;
-}
-
-int std_vprintf(const char *fmt, va_list args)
-{
-    return vprintf(fmt, args);
-}
-
-__attribute__((format(printf, 1, 2)))
-void _Noreturn std_panic(const char *fmt, ...)
-{
-    va_list args;
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    va_end(args);
-    exit(1);
+    return vfprintf(fd, fmt, args);
 }
 
 void* std_realloc(void *ptr, size_t size)

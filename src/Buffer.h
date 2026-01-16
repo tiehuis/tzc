@@ -34,3 +34,14 @@ static Buffer Buffer_fromFile(const char *filename)
 
     return (Buffer){ .data = source, .len = fsize };
 }
+
+// TODO: correctly handle base and prefix
+static int64_t Buffer_toInt(Buffer b, int base)
+{
+    int64_t v = 0;
+    for (uint32_t i = 0; i < b.len; i++) {
+        v *= base;
+        v += b.data[i] - '0';
+    }
+    return v;
+}

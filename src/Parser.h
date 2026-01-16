@@ -139,7 +139,7 @@ static Node* Parser_allocNode0(Parser *p, const char *function, int line)
 
     p->nodes_count++;
     Node *n = std_malloc(sizeof(Node));
-    if (!n) std_panic("oom");
+    if (!n) std_panic("oom\n");
     return n;
 }
 
@@ -2253,7 +2253,7 @@ static int Parser_binOpPrecedence(BinOp op)
             return 8;
 
         case binop_invalid:
-            std_panic("unreachable");
+            assume(false);
             return -1;
     }
 }

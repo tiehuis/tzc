@@ -8,14 +8,24 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#if defined(NDEBUG)
+#define assume(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
+#else
+#include <assert.h>
+#define assume(cond) assert(cond)
+#endif
+
 void _Noreturn std_exit(int);
-int std_printf(const char *fmt, ...);
-int std_fprintf(void *fd, const char *fmt, ...);
-int std_vprintf(const char *fmt, va_list args);
-void _Noreturn std_panic(const char *fmt, ...);
+int std_vfprintf(void*, const char *fmt, va_list args);
 void* std_realloc(void*, size_t);
 void* std_malloc(size_t);
 char* std_readFile(const char *filename, long *fsize);
-char* std_readFileRelative(const char *dir, const char *filename, long *fsize);
 void* std_createFile(const char *filename);
 size_t std_writeFile(void *ptr, size_t size, size_t nitems, void *fh);
+// generic implementation in os.c
+void* std_memcpy(void *to, const void *from, size_t bytes);
+size_t std_strlen(const char *s);
+void _Noreturn std_panic(const char *fmt, ...);
+int std_printf(const char *fmt, ...);
+int std_fprintf(void *fd, const char *fmt, ...);
+int std_vprintf(const char *fmt, va_list args);
