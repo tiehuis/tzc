@@ -506,7 +506,6 @@ static IrTempId Ir_lowerPrimaryExpr(Ir *ir, Node *expr)
             IrBlockId b_else = Ir_newBlock(ir);
             IrBlockId b_next = Ir_newBlock(ir);
 
-            // ir_op_copy does not declare, declare empty var
             IrTempId dst = Ir_newTemp(ir);
             IrInst inst3 = {
                 .op = ir_op_const_num,

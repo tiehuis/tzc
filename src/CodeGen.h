@@ -26,7 +26,7 @@ static void CodeGen_init(CodeGen *cg, const char *output_filename, const char *z
     joined[len] = 0;
 
     cg->zig_h = std_readFile(joined, &cg->zig_h_len);
-    if (!cg->zig_h) std_panic(NULL, "failed to open %s/zig.h\n", zig_lib_dir);
+    if (!cg->zig_h) std_panic(NULL, "failed to open %s\n", joined);
 }
 
 #define emit(fmt, ...) std_fprintf(cg->out, fmt, ## __VA_ARGS__)

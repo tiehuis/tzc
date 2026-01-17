@@ -41,13 +41,6 @@ char* std_readFile(const char *filename, long *fsize)
     return source;
 }
 
-char* std_readFileRelative(const char *dir, const char *filename, long *fsize)
-{
-    char joined[512];
-    snprintf(joined, sizeof(joined) - 1, "%s/%s", dir, filename);
-    return std_readFile(joined, fsize);
-}
-
 void* std_createFile(const char *filename)
 {
     int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
