@@ -389,24 +389,18 @@ typedef struct {
     Node *bit_backing_integer_size;
 } NodeDataPtrAlignExpr;
 
-typedef enum {
-    pointer_modifier_const      = 0x01,
-    pointer_modifier_volatile   = 0x02,
-    pointer_modifier_allowzero  = 0x04,
-} PointerModifiers;
-
 typedef struct {
     Node *slice;
     Node *bytealign;
     Node *addrspace;
-    PointerModifiers modifiers;
+    tTypePointerModifiers modifiers;
 } NodeDataPrefixTypeSlice;
 
 typedef struct {
     Node *ptr;
     Node *addrspace;
     Node *align;
-    PointerModifiers modifiers;
+    tTypePointerModifiers modifiers;
 } NodeDataPrefixTypePtr;
 
 typedef struct {

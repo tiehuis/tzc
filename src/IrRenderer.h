@@ -1,23 +1,28 @@
 typedef struct IrRenderer {
     int indent;
+    CompileContext *ctx;
 } IrRenderer;
-
 
 #define indent(r) std_printf("%*c", r->indent, ' ')
 #define emit(fmt, ...) std_printf(fmt, ## __VA_ARGS__)
+#define Buf(_b) Buffer(CompileContext_getString(r->ctx, (_b)))
 
-static void IrRenderer_init(IrRenderer *r)
+static void IrRenderer_init(IrRenderer *r, CompileContext *ctx)
 {
     r->indent = 0;
+    r->ctx = ctx;
 }
 
 static void IrRenderer_renderInst(IrRenderer *r, IrInst inst)
 {
     indent(r);
 
+    tType ty = CompileContext_getType(r->ctx, inst.ty);
+    emit("[%s] ", tTypeTag_Name(ty.tag)); // TODO: should accept tType and render that
+
     switch (inst.op) {
         case ir_op_call:
-            emit("%s %d "PRIb, IrOp_name(inst.op), inst.dst, Buffer(inst.data.call.fn.data.sym));
+            emit("%s %d "PRIb, IrOp_name(inst.op), inst.dst, Buf(inst.data.call.fn.data.sym));
             for (uint8_t i = 0; i < inst.data.call.args_len; i++) {
                 emit(" %d", inst.data.call.args[i]);
             }
@@ -43,7 +48,7 @@ static void IrRenderer_renderInst(IrRenderer *r, IrInst inst)
             break;
 
         case ir_op_const_bytes:
-            emit("%s %d `"PRIb"`\n", IrOp_name(inst.op), inst.dst, Buffer(inst.data.bytes));
+            emit("%s %d `"PRIb"`\n", IrOp_name(inst.op), inst.dst, Buf(inst.data.bytes));
             break;
 
         case ir_op_or:
@@ -75,7 +80,7 @@ static void IrRenderer_renderInst(IrRenderer *r, IrInst inst)
             break;
 
         case ir_op_load_arg:
-            emit("%s v%d "PRIb"\n", IrOp_name(inst.op), inst.data.arg.id, Buffer(inst.data.arg.name));
+            emit("%s v%d "PRIb"\n", IrOp_name(inst.op), inst.data.arg.id, Buf(inst.data.arg.name));
             break;
     }
 }
@@ -115,7 +120,7 @@ static void IrRenderer_renderBlock(IrRenderer *r, IrBlockId id, IrBlock *block)
 
 static void IrRenderer_renderFunc(IrRenderer *r, IrFunc *func)
 {
-    emit(PRIb":\n", Buffer(func->name));
+    emit(PRIb":\n", Buf(func->name));
     r->indent++;
     for (uint32_t i = 0; i < func->blocks.len; i++) {
         IrRenderer_renderBlock(r, i, func->blocks.data[i]);
@@ -133,3 +138,4 @@ static void IrRenderer_render(IrRenderer *r, IrProgram *ir)
 
 #undef emit
 #undef indent
+#undef Buf

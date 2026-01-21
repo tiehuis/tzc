@@ -445,8 +445,10 @@ static int Tokenizer_getKeyword(Buffer b)
 }
 
 
-static void Tokenizer_init(Tokenizer *t, Buffer source)
+static void Tokenizer_init(Tokenizer *t, CompileContext *ctx, Buffer source)
 {
+    (void)ctx;
+
     t->buffer = source;
     t->index = (
         (unsigned char)t->buffer.data[0] == 0xef &&

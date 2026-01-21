@@ -13,7 +13,7 @@ static void TypeName##Array_init(TypeName##Array *a)                          \
     a->data = std_malloc(sizeof(Type) * a->cap);                              \
     if (!a->data) std_panic("oom");                                           \
 }                                                                             \
-static void TypeName##Array_append(TypeName##Array *a, Type tag)              \
+static uint32_t TypeName##Array_append(TypeName##Array *a, Type tag)          \
 {                                                                             \
     if (a->len + 1 >= a->cap) {                                               \
         a->cap *= 2;                                                          \
@@ -21,7 +21,9 @@ static void TypeName##Array_append(TypeName##Array *a, Type tag)              \
         if (!n) std_panic("oom");                                             \
         a->data = n;                                                          \
     }                                                                         \
-    a->data[a->len++] = tag;                                                  \
+    uint32_t id = a->len++;                                                   \
+    a->data[id] = tag;                                                        \
+    return id;                                                                \
 }                                                                             \
 __attribute__((unused))                                                       \
 static void TypeName##Array_appendMany(TypeName##Array *a, Type *tags, size_t tags_len)   \

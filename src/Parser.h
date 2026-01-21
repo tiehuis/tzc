@@ -21,8 +21,9 @@ typedef struct Parser {
 
 static void Parser_debugNode(Parser *p, Node *n, const char *prefix);
 
-static void Parser_init(Parser *p, Buffer source, Token *tokens, uint32_t tokens_len)
+static void Parser_init(Parser *p, CompileContext *ctx, Buffer source, Token *tokens, uint32_t tokens_len)
 {
+    (void)ctx;
     p->source = source;
     p->tokens = tokens;
     p->tokens_len = tokens_len;
@@ -628,7 +629,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
     if (slice_type_start) {
         Node *bytealign = NULL;
         Node *addrspace = NULL;
-        PointerModifiers modifiers = 0;
+        tTypePointerModifiers modifiers = 0;
 
         int c = 0;
         while (c++ < LOOP_MAX) {
@@ -676,7 +677,7 @@ static Node* Parser_parsePrefixTypeOp(Parser *p)
     if (ptr_type_start) {
         Node *addrspace = NULL;
         Node *align = NULL;
-        PointerModifiers modifiers = 0;
+        tTypePointerModifiers modifiers = 0;
 
         int c = 0;
         while (c++ < LOOP_MAX) {

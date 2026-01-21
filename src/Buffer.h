@@ -26,6 +26,16 @@ static int Buffer_eql(Buffer b, const char *s)
     return s[b.len] != 0;
 }
 
+static int Buffer_eqlBuffer(Buffer b, Buffer c)
+{
+    if (b.len != c.len) return -1;
+    for (size_t i = 0; i < b.len; i++) {
+        int d = c.data[i] - b.data[i];
+        if (d != 0) return d;
+    }
+    return 0;
+}
+
 static Buffer Buffer_fromFile(const char *filename)
 {
     long fsize;
