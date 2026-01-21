@@ -17,23 +17,23 @@ static Buffer Buffer_slice(Buffer parent, uint32_t start, uint32_t end)
     return (Buffer){ .data = parent.data + start, .len = end - start };
 }
 
-static int Buffer_eql(Buffer b, const char *s)
+static bool Buffer_eql(Buffer b, const char *s)
 {
     for (size_t i = 0; i < b.len; i++) {
         int d = s[i] - b.data[i];
-        if (d != 0) return d;
+        if (d != 0) return false;
     }
-    return s[b.len] != 0;
+    return s[b.len] == 0;
 }
 
-static int Buffer_eqlBuffer(Buffer b, Buffer c)
+static bool Buffer_eqlBuffer(Buffer b, Buffer c)
 {
-    if (b.len != c.len) return -1;
+    if (b.len != c.len) return false;
     for (size_t i = 0; i < b.len; i++) {
         int d = c.data[i] - b.data[i];
-        if (d != 0) return d;
+        if (d != 0) return false;
     }
-    return 0;
+    return true;
 }
 
 static Buffer Buffer_fromFile(const char *filename)

@@ -13,12 +13,15 @@ static void IrRenderer_init(IrRenderer *r, CompileContext *ctx)
     r->ctx = ctx;
 }
 
-static void IrRenderer_renderInst(IrRenderer *r, IrInst inst)
+static void IrRenderer_renderInst(IrRenderer *r, IrFunc *func, IrInst inst)
 {
     indent(r);
 
-    tType ty = CompileContext_getType(r->ctx, inst.ty);
-    emit("[%s] ", tTypeTag_Name(ty.tag)); // TODO: should accept tType and render that
+    if (IrOp_hasDst(inst.op)) {
+        IrTemp dst = func->temps.data[inst.dst];
+        tType ty = CompileContext_getType(r->ctx, dst.type);
+        emit("[%s] ", tTypeTag_Name(ty.tag)); // TODO: should accept tType and render that
+    }
 
     switch (inst.op) {
         case ir_op_call:
@@ -106,13 +109,13 @@ static void IrRenderer_renderTerm(IrRenderer *r, IrTerm term)
     }
 }
 
-static void IrRenderer_renderBlock(IrRenderer *r, IrBlockId id, IrBlock *block)
+static void IrRenderer_renderBlock(IrRenderer *r, IrFunc *func, IrBlockId id, IrBlock *block)
 {
     indent(r);
     emit("b%d:\n", id);
     r->indent++;
     for (uint32_t i = 0; i < block->insts.len; i++) {
-        IrRenderer_renderInst(r, block->insts.data[i]);
+        IrRenderer_renderInst(r, func, block->insts.data[i]);
     }
     IrRenderer_renderTerm(r, block->term);
     r->indent--;
@@ -123,7 +126,7 @@ static void IrRenderer_renderFunc(IrRenderer *r, IrFunc *func)
     emit(PRIb":\n", Buf(func->name));
     r->indent++;
     for (uint32_t i = 0; i < func->blocks.len; i++) {
-        IrRenderer_renderBlock(r, i, func->blocks.data[i]);
+        IrRenderer_renderBlock(r, func, i, func->blocks.data[i]);
     }
     emit("\n");
     r->indent--;

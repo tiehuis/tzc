@@ -180,14 +180,17 @@ static void CodeGen_emitFuncDecl(CodeGen *cg, IrFunc *func)
     emit(")");
 }
 
-static void CodeGen_emitInst(CodeGen *cg, IrInst inst)
+static void CodeGen_emitInst(CodeGen *cg, IrFunc *func, IrInst inst)
 {
     indent();
 
+    IrTemp dst;
+    if (IrOp_hasDst(inst.op)) dst = func->temps.data[inst.dst];
+
     switch (inst.op) {
         case ir_op_call:
-            // TODO: pass through fn name lazily
-            emit("int t%d = "PRIb"(", inst.dst, Buf(inst.data.call.fn.data.sym));
+            CodeGen_emitType(cg, dst.type);
+            emit(" t%d = "PRIb"(", inst.dst, Buffer(CompileContext_getString(cg->ctx, inst.data.call.fn.data.sym)));
             for (uint8_t i = 0; i < inst.data.call.args_len; i++) {
                 emit("t%d", inst.data.call.args[i]);
                 if (i + 1 < inst.data.call.args_len) emit(",");
@@ -200,25 +203,25 @@ static void CodeGen_emitInst(CodeGen *cg, IrInst inst)
             break;
 
         case ir_op_negate:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = -t%d;\n", inst.dst, inst.data.unary.lhs);
             break;
         case ir_op_bw_not:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = ~t%d;\n", inst.dst, inst.data.unary.lhs);
             break;
         case ir_op_bw_and:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = &t%d;\n", inst.dst, inst.data.unary.lhs);
             break;
         case ir_op_not:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = !t%d;\n", inst.dst, inst.data.unary.lhs);
             break;
 
         case ir_op_const_num:
         case ir_op_const_char:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = %lld;\n", inst.dst, inst.data.i64);
             break;
 
@@ -226,7 +229,7 @@ static void CodeGen_emitInst(CodeGen *cg, IrInst inst)
             emit("v%d = t%d;\n", inst.data.var.id, inst.data.var.value);
             break;
         case ir_op_load_var:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = v%d;\n", inst.dst, inst.data.var.id);
             break;
 
@@ -235,77 +238,76 @@ static void CodeGen_emitInst(CodeGen *cg, IrInst inst)
             break;
 
         case ir_op_const_bytes:
-            // bytes includes quotations from tokenizer
-            //CodeGen_emitType(cg, inst.ty);
-            emit("char *t%d = "PRIb";\n", inst.dst, Buf(inst.data.bytes));
+            CodeGen_emitType(cg, dst.type);
+            emit(" t%d = "PRIb";\n", inst.dst, Buf(inst.data.bytes));
             break;
 
         case ir_op_or:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d || t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_and:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d && t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_eq:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d == t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_neq:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d != t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_lt:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d < t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_gt:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d > t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_lte:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d <= t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_gte:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d >= t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_bit_and:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d & t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_bit_xor:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d ^ t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_shl:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d << t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_shr:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d >> t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_add:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d + t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_sub:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d - t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_mul:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d * t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_div:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d / t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
         case ir_op_mod:
-            CodeGen_emitType(cg, inst.ty);
+            CodeGen_emitType(cg, dst.type);
             emit(" t%d = t%d % t%d;\n", inst.dst, inst.data.binary.lhs, inst.data.binary.rhs);
             break;
 
@@ -334,15 +336,12 @@ static void CodeGen_emitTerm(CodeGen *cg, IrTerm term)
     }
 }
 
-static void CodeGen_emitBlock(CodeGen *cg, IrBlockId id, IrBlock *block)
+static void CodeGen_emitBlock(CodeGen *cg, IrFunc *func, IrBlockId id, IrBlock *block)
 {
-    // we sometimes emit an empty jump target, omit these (maybe add back in
-    // if this is used as a target).
-    //if (block->insts.len == 0 && block->term.tag == ir_term_next) return;
-
+    // jump targets can be empty, hence emit an empty statement unconditionally
     emit("b%d:;\n", id);
     for (uint32_t i = 0; i < block->insts.len; i++) {
-        CodeGen_emitInst(cg, block->insts.data[i]);
+        CodeGen_emitInst(cg, func, block->insts.data[i]);
     }
     CodeGen_emitTerm(cg, block->term);
 }
@@ -354,11 +353,12 @@ static void CodeGen_emitFuncDef(CodeGen *cg, IrFunc *func)
 
     for (uint32_t i = 0; i < func->vars.len; i++) {
         indent();
-        emit("int v%d; // "PRIb"\n", i, Buf(func->vars.data[i].name));
+        CodeGen_emitType(cg, func->vars.data[i].type);
+        emit(" v%d; // "PRIb"\n", i, Buf(func->vars.data[i].name));
     }
 
     for (uint32_t i = 0; i < func->blocks.len; i++) {
-        CodeGen_emitBlock(cg, i, func->blocks.data[i]);
+        CodeGen_emitBlock(cg, func, i, func->blocks.data[i]);
     }
 
     emit("}\n\n");

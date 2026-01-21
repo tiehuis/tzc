@@ -437,7 +437,7 @@ static int Tokenizer_getKeyword(Buffer b)
 {
     size_t keywords_count = sizeof(keywords) / sizeof(Keyword);
     for (size_t i = 0; i < keywords_count; i++) {
-        if (Buffer_eql(b, keywords[i].literal) == 0) {
+        if (Buffer_eql(b, keywords[i].literal)) {
             return keywords[i].tag;
         }
     }

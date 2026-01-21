@@ -34,17 +34,17 @@ typedef enum {
     ty_anyopaque,
     ty_bool,
     ty_u8,
-    ty_u16,
-    ty_u32,
-    ty_u64,
-    ty_u128,
     ty_i8,
+    ty_u16,
     ty_i16,
+    ty_u32,
     ty_i32,
-    ty_i64,
-    ty_i128,
-    ty_isize,
     ty_usize,
+    ty_isize,
+    ty_u64,
+    ty_i64,
+    ty_u128,
+    ty_i128,
     ty_c_char,
     ty_c_short,
     ty_c_ushort,
@@ -54,11 +54,11 @@ typedef enum {
     ty_c_ulong,
     ty_c_longlong,
     ty_c_ulonglong,
-    ty_c_longdouble,
     ty_f16,
     ty_f32,
     ty_f64,
     ty_f80,
+    ty_c_longdouble,
     ty_f128,
     // complex
     ty_ptr_one,
@@ -155,6 +155,85 @@ typedef struct {
     tTypeData data;             // remaining
 } tType;
 
+typedef enum {
+    class_int,
+    class_float,
+    class_ptr,
+    class_other,
+} tTypeInfoClass;
+
+typedef struct {
+    tTypeInfoClass class;
+    uint16_t bits;
+    bool is_signed;
+} tTypeInfo;
+
+static tTypeInfo tType_info(tType type)
+{
+    switch (type.tag) {
+        case ty_u8:
+            return (tTypeInfo){ .class = class_int, .bits = 8, .is_signed = false };
+        case ty_u16:
+            return (tTypeInfo){ .class = class_int, .bits = 16, .is_signed = false };
+        case ty_u32:
+            return (tTypeInfo){ .class = class_int, .bits = 32, .is_signed = false };
+        case ty_u64:
+            return (tTypeInfo){ .class = class_int, .bits = 64, .is_signed = false };
+        case ty_u128:
+            return (tTypeInfo){ .class = class_int, .bits = 128, .is_signed = false };
+        case ty_i8:
+            return (tTypeInfo){ .class = class_int, .bits = 8, .is_signed = true };
+        case ty_i16:
+            return (tTypeInfo){ .class = class_int, .bits = 16, .is_signed = true };
+        case ty_i32:
+            return (tTypeInfo){ .class = class_int, .bits = 32, .is_signed = true };
+        case ty_i64:
+            return (tTypeInfo){ .class = class_int, .bits = 64, .is_signed = true };
+        case ty_i128:
+            return (tTypeInfo){ .class = class_int, .bits = 128, .is_signed = true };
+        case ty_isize:
+            return (tTypeInfo){ .class = class_int, .bits = 64, .is_signed = true }; // platform-specific
+        case ty_usize:
+            return (tTypeInfo){ .class = class_int, .bits = 64, .is_signed = false }; // platform-specific
+        case ty_c_char:
+            return (tTypeInfo){ .class = class_int, .bits = 8, .is_signed = false }; // platform-specific
+        case ty_c_short:
+            return (tTypeInfo){ .class = class_int, .bits = 16, .is_signed = true }; // platform-specific
+        case ty_c_ushort:
+            return (tTypeInfo){ .class = class_int, .bits = 16, .is_signed = false }; // platform-specific
+        case ty_c_int:
+            return (tTypeInfo){ .class = class_int, .bits = 32, .is_signed = true }; // platform-specific
+        case ty_c_uint:
+            return (tTypeInfo){ .class = class_int, .bits = 32, .is_signed = false }; // platform-specific
+        case ty_c_long:
+            return (tTypeInfo){ .class = class_int, .bits = 64, .is_signed = true }; // platform-specific
+        case ty_c_ulong:
+            return (tTypeInfo){ .class = class_int, .bits = 64, .is_signed = false }; // platform-specific
+        case ty_int:
+            return (tTypeInfo){ .class = class_int, .bits = type.data.int_.bits, .is_signed = type.data.int_.is_signed };
+
+        case ty_c_longdouble:
+            return (tTypeInfo){ .class = class_float, .bits = 80, .is_signed = false }; // platform-specific
+        case ty_f16:
+            return (tTypeInfo){ .class = class_float, .bits = 16, .is_signed = false };
+        case ty_f32:
+            return (tTypeInfo){ .class = class_float, .bits = 32, .is_signed = false };
+        case ty_f64:
+            return (tTypeInfo){ .class = class_float, .bits = 64, .is_signed = false };
+        case ty_f80:
+            return (tTypeInfo){ .class = class_float, .bits = 80, .is_signed = false };
+        case ty_f128:
+            return (tTypeInfo){ .class = class_float, .bits = 128, .is_signed = false };
+
+        case ty_ptr_one:
+        case ty_ptr_two:
+            return (tTypeInfo){ .class = class_ptr };
+
+        default:
+            return (tTypeInfo){ .class = class_other };
+    }
+}
+
 static bool tType_eql(tType a, tType b)
 {
     if (a.tag != b.tag) return false;
@@ -231,7 +310,7 @@ static sInternId CompileContext_putString(CompileContext *ctx, Buffer buffer)
     for (uint32_t i = 0 ; i < ctx->strings.entries.len; i++) {
         sInternEntry e = ctx->strings.entries.data[i];
         if (e.hash != hash) continue;
-        if (Buffer_eqlBuffer(e.buffer, buffer) == 0) return (sInternId)i;
+        if (Buffer_eqlBuffer(e.buffer, buffer)) return (sInternId)i;
     }
 
     sInternEntry en = { .buffer = buffer, .hash = hash };
@@ -248,6 +327,7 @@ static uint64_t CompileContext_hashType(tType ty)
     uint64_t hash = ty.tag;
     switch (ty.tag) {
         case ty_anyopaque:
+        case ty_bool:
         case ty_u8:
         case ty_u16:
         case ty_u32:

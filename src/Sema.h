@@ -41,7 +41,7 @@ static tInternId Sema_resolveBuiltinTypeId(CompileContext *ctx, Buffer b)
     };
 
     for (uint32_t i = 0; i < sizeof(mappings)/sizeof(*mappings); i++) {
-        if (!Buffer_eql(b, mappings[i].name)) {
+        if (Buffer_eql(b, mappings[i].name)) {
             return CompileContext_putType(ctx, (tType){ .tag = mappings[i].tag });
         }
     }
@@ -141,4 +141,22 @@ static tInternId Sema_evalTypeName(CompileContext *ctx, Node *n)
         default:
             std_panic("unsupported tag: %s\n", NodeTag_name(n->tag));
     }
+}
+static tInternId Sema_peerResolveType(CompileContext *ctx, tInternId a_id, tInternId b_id)
+{
+    if (a_id == b_id) return a_id;
+    tType a = CompileContext_getType(ctx, a_id);
+    tType b = CompileContext_getType(ctx, b_id);
+    tTypeInfo a_info = tType_info(a);
+    tTypeInfo b_info = tType_info(b);
+
+    if (a_info.class == class_int && b_info.class == class_int) {
+        // for now, choose one of the input types, but can generate types not either a or b
+        return (a_info.bits > b_info.bits) ? a_id : b_id;
+    }
+    if (a_info.class == class_float && b_info.class == class_float) {
+        return (a_info.bits > b_info.bits) ? a_id : b_id;
+    }
+
+    std_panic("peer resolution failed: %d <-> %d\n", a_info.class, b_info.class);
 }

@@ -457,7 +457,7 @@ static Node* Parser_parsePtrTypeStart(Parser *p)
         sentinel_expr = Parser_parseExpr(p);
         if (!sentinel_expr) Parser_fail(p, "expected expression for sentinel");
     } else {
-        if (!Buffer_eql(Parser_tokenSlice(p), "c")) {
+        if (Buffer_eql(Parser_tokenSlice(p), "c")) {
             p->index++;
             type = node_ptr_type_c;
         }

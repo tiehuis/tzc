@@ -34,7 +34,7 @@ complete zig compiler with a lib directory accessible as this is not bundled.
 
 ```
 ./build.sh
-./tzc.sh test/cg2.zig ../zig/lib
+./tzc.sh test/cg4.zig ../zig/lib
 ./a.out
 Hello 0!
 Hello 1!

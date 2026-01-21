@@ -8,6 +8,7 @@ typedef uint32_t IrTempId;
 typedef uint32_t IrTypeId;
 typedef uint32_t IrVarId;
 
+// Consolidate with IrVar
 typedef struct {
     sInternId name; // optional
     tInternId type;
@@ -32,6 +33,10 @@ typedef struct {
     IrValueTag tag;
     IrValueData data;
 } IrValue;
+
+typedef struct {
+    tInternId type;
+} IrTemp;
 
 typedef enum {
     // array
@@ -75,6 +80,19 @@ typedef enum {
     ir_op_unreachable,
     ir_op_invalid,
 } IrOp;
+
+static bool IrOp_hasDst(IrOp op)
+{
+    switch (op) {
+        case ir_op_copy:
+        case ir_op_store_var:
+        case ir_op_load_arg:
+        case ir_op_unreachable:
+            return false;
+        default:
+            return true;
+    }
+}
 
 static const char* IrOp_name(IrOp op)
 {
@@ -199,8 +217,7 @@ typedef union {
 } IrOpData;
 
 typedef struct {
-    int dst;
-    tInternId ty;
+    IrTempId dst;
     IrOp op;
     IrOpData data;
 } IrInst;
@@ -243,6 +260,7 @@ typedef struct {
 
 DEFINE_ARRAY(IrNamedType);
 DEFINE_ARRAY(IrVar);
+DEFINE_ARRAY(IrTemp);
 DEFINE_ARRAY_NAMED(IrBlock*, IrBlock);
 
 typedef struct {
@@ -251,8 +269,8 @@ typedef struct {
     tInternId ret_ty;
     IrBlockArray blocks;
     IrNamedTypeArray call_args;
+    IrTempArray temps;
     IrVarArray vars;
-    IrTempId next_temp;
     DeclModifiers modifiers;
 } IrFunc;
 
@@ -261,7 +279,7 @@ void IrFunc_Init(IrFunc *func)
     IrBlockArray_init(&func->blocks);
     IrNamedTypeArray_init(&func->call_args);
     IrVarArray_init(&func->vars);
-    func->next_temp = 0;
+    IrTempArray_init(&func->temps);
 }
 DEFINE_ARRAY_NAMED(IrFunc*, IrFunc);
 
@@ -287,9 +305,20 @@ typedef struct {
     // stack for current control flow we are in (e.g. loop)
 } Ir;
 
-static IrTempId Ir_newTemp(Ir *ir)
+static IrTempId Ir_lowerExpr(Ir *ir, Node *expr);
+static void Ir_lowerBlock(Ir *ir, NodeDataBlock block);
+static void Ir_lowerStatementExpr(Ir *ir, Node *statement_or_expr);
+static IrVarId Ir_putVar(Ir *ir, IrVar var);
+static IrVar Ir_getVar(Ir *ir, IrVarId id);
+
+static IrTempId Ir_newTemp(Ir *ir, tInternId ty)
 {
-    return ir->func->next_temp++;
+    return IrTempArray_append(&ir->func->temps, (IrTemp){. type = ty });
+}
+
+static tInternId Ir_getTempType(Ir *ir, IrTempId tmp_id)
+{
+    return ir->func->temps.data[tmp_id].type;
 }
 
 static IrBlockId Ir_newBlock(Ir *ir)
@@ -365,66 +394,86 @@ static IrVarId Ir_appendVar(Ir *ir, IrVar var)
     return ir->func->vars.len - 1;
 }
 
-static void Ir_emitStoreVar(Ir *ir, IrVarId var, IrTempId value)
+static tInternId Ir_primitiveType(Ir *ir, tTypeTag tag)
 {
-    IrInst inst = {
+    return CompileContext_putType(ir->ctx, (tType){ .tag = tag });
+}
+
+static void Ir_emitStoreVar(Ir *ir, IrVarId var_id, IrTempId tmp_id)
+{
+    tInternId src_type = Ir_getTempType(ir, tmp_id);
+    IrVar var = Ir_getVar(ir, var_id);
+
+    // TODO: These only need to be compatible, not equal
+    // if (var.type != src_type) std_panic("type mismatch\n");
+    (void)src_type;
+    (void)var;
+
+    Ir_appendInst(ir, (IrInst) {
         .op = ir_op_store_var,
         .dst = ir_invalid_id,
-        .ty = 0,
-        .data = { .var = { .id = var, .value = value } },
-    };
-    Ir_appendInst(ir, inst);
+        .data = { .var = { .id = var_id, .value = tmp_id } },
+    });
 }
 
-static IrTempId Ir_emitLoadVar(Ir *ir, IrVarId var)
+static IrTempId Ir_emitLoadVar(Ir *ir, IrVarId var_id)
 {
-    IrInst inst = {
+    IrVar var = Ir_getVar(ir, var_id);
+    IrTempId tmp_id = Ir_newTemp(ir, var.type);
+    return Ir_appendInst(ir, (IrInst){
         .op = ir_op_load_var,
-        .dst = Ir_newTemp(ir),
-        .ty = 0,
-        .data = { .var = { .id = var, .value = ir_invalid_id } },
-    };
-    return Ir_appendInst(ir, inst);
+        .dst = tmp_id,
+        .data = { .var = { .id = var_id, .value = ir_invalid_id } },
+    });
 }
-
-static IrTempId Ir_lowerExpr(Ir *ir, Node *expr);
-static void Ir_lowerBlock(Ir *ir, NodeDataBlock block);
-static void Ir_lowerStatementExpr(Ir *ir, Node *statement_or_expr);
-static IrVarId Ir_InternVar(Ir *ir, Buffer name);
 
 static IrTempId Ir_lowerPrimaryTypeExpr(Ir *ir, NodeDataPrimaryTypeExpr primary_type_expr)
 {
-    IrInst inst;
-    inst.dst = Ir_newTemp(ir);
-    inst.ty = 0;
-
     switch (primary_type_expr.tag) {
         case node_primary_type_number_literal:
-            inst.op = ir_op_const_num;
-            inst.data.i64 = Buffer_toInt(primary_type_expr.data.raw, 10);
-            break;
+            return Ir_appendInst(ir, (IrInst){
+                .op = ir_op_const_num,
+                .dst = Ir_newTemp(ir, Ir_primitiveType(ir, ty_c_int)),
+                .data = { .i64 = Buffer_toInt(primary_type_expr.data.raw, 10) },
+            });
 
         case node_primary_type_identifier:
-            inst.op = ir_op_load_var;
-            inst.data.var.id = Ir_InternVar(ir, primary_type_expr.data.raw);
-            break;
+        {
+            // Should use GetVar as it should exist, need a symbol table
+            IrVarId rval = Ir_putVar(ir, (IrVar){
+                .name = CompileContext_putString(ir->ctx, primary_type_expr.data.raw),
+                .type = Ir_primitiveType(ir, ty_c_int),
+            });
+            return Ir_emitLoadVar(ir, rval);
+        }
 
         case node_primary_type_char_literal:
-            inst.op = ir_op_const_char;
-            assume(primary_type_expr.data.raw.len == 0);
-            inst.data.i64 = primary_type_expr.data.raw.data[0];
-            break;
+            assume(primary_type_expr.data.raw.len == 1);
+            return Ir_appendInst(ir, (IrInst){
+                .op = ir_op_const_char,
+                .dst = Ir_newTemp(ir, Ir_primitiveType(ir, ty_c_char)),
+                .data = { .i64 = primary_type_expr.data.raw.data[0] },
+            });
 
         case node_primary_type_string_literal:
-            inst.op = ir_op_const_bytes;
-            inst.data.bytes = CompileContext_putString(ir->ctx, primary_type_expr.data.raw);
-            // TODO: store in const data and load_bytes -> load_const, also use for things
-            // like structures/arrays etc.
-            break;
+        {
+            tInternId const_ptr_c_char = CompileContext_putType(ir->ctx, (tType){
+                .tag = ty_ptr_one,
+                .data = {
+                    .ptr = { .child = Ir_primitiveType(ir, ty_c_char), .modifiers = pointer_modifier_const },
+                }
+            });
+            return Ir_appendInst(ir, (IrInst){
+                .op = ir_op_const_bytes,
+                .dst = Ir_newTemp(ir, const_ptr_c_char),
+                // TODO: Ensure string is also stored in const table
+                .data = { .bytes = CompileContext_putString(ir->ctx, primary_type_expr.data.raw) },
+            });
+        }
+        break;
 
         case node_primary_type_unreachable:
-            inst.op = ir_op_unreachable;
-            break;
+            return Ir_appendInst(ir, (IrInst){ .op = ir_op_unreachable });
 
         case node_primary_type_builtin:
         case node_primary_type_container_decl:
@@ -440,10 +489,10 @@ static IrTempId Ir_lowerPrimaryTypeExpr(Ir *ir, NodeDataPrimaryTypeExpr primary_
             std_panic("unsupported tag: %s\n", NodePrimaryTypeTag_name(primary_type_expr.tag));
 
         default:
-            assume(false);
+            break;
     }
 
-    return Ir_appendInst(ir, inst);
+    assume(false);
 }
 
 static IrTempId Ir_lowerTypeExpr(Ir *ir, NodeDataTypeExpr expr)
@@ -459,7 +508,7 @@ static IrTempId Ir_lowerTypeExpr(Ir *ir, NodeDataTypeExpr expr)
         return Ir_lowerPrimaryTypeExpr(ir, suffix_expr.expr->data.primary_type_expr);
     }
 
-    IrTempId dst = Ir_newTemp(ir);
+    IrTempId dst;
 
     for (uint32_t i = 0; i < suffix_expr.suffixes_len; i++) {
         Node *s = suffix_expr.suffixes[i];
@@ -476,10 +525,12 @@ static IrTempId Ir_lowerTypeExpr(Ir *ir, NodeDataTypeExpr expr)
                     std_panic("call supports 16 arguments max\n");
                 }
 
+                // TODO: identify from fn_call definition ret_ty
+                dst = Ir_newTemp(ir, Ir_primitiveType(ir, ty_c_int));
+
                 IrInst call = {
                     .op = ir_op_call,
                     .dst = dst,
-                    .ty = 0,
                     .data = { .call = { .fn = value, .args_len = s->data.fn_call_arguments.exprs_len } },
                 };
 
@@ -511,10 +562,9 @@ static IrTempId Ir_lowerPrimaryExpr(Ir *ir, Node *expr)
             IrBlockId b_else = Ir_newBlock(ir);
             IrBlockId b_next = Ir_newBlock(ir);
 
-            IrTempId dst = Ir_newTemp(ir);
+            IrTempId dst = Ir_newTemp(ir, Ir_primitiveType(ir, ty_c_int)); // TODO: compute type from rval
             IrInst inst3 = {
                 .op = ir_op_const_num,
-                .ty = 0,
                 .dst = dst,
                 .data = { .i64 = 0 },
             };
@@ -526,7 +576,6 @@ static IrTempId Ir_lowerPrimaryExpr(Ir *ir, Node *expr)
             Ir_setBlock(ir, b_if);
             IrInst inst1 = {
                 .op = ir_op_copy,
-                .ty = 0,
                 .dst = dst,
                 .data = { .unary = { .lhs = Ir_lowerExpr(ir, if_expr.expr) } },
             };
@@ -536,7 +585,6 @@ static IrTempId Ir_lowerPrimaryExpr(Ir *ir, Node *expr)
             Ir_setBlock(ir, b_else);
             IrInst inst2 = {
                 .op = ir_op_copy,
-                .ty = 0,
                 .dst = dst,
                 .data = { .unary = { .lhs = Ir_lowerExpr(ir, if_expr.else_payload_expr) } },
             };
@@ -579,14 +627,12 @@ static IrTempId Ir_lowerPrimaryExpr(Ir *ir, Node *expr)
 static IrTempId Ir_lowerUnaryExpr(Ir *ir, NodeDataUnaryExpr unary_expr)
 {
     IrTempId inner = Ir_lowerPrimaryExpr(ir, unary_expr.expr);
+    tInternId inner_type = Ir_getTempType(ir, inner);
 
     // passthrough if simple op
     if (unary_expr.ops_len == 0) return inner;
 
-    IrInst inst = {
-        .op = ir_op_invalid,
-        .ty = 0,
-    };
+    IrInst inst = { .op = ir_op_invalid };
 
     // emit instructions during each loop
     for (uint32_t i = 0; i < unary_expr.ops_len; i++) {
@@ -612,7 +658,7 @@ static IrTempId Ir_lowerUnaryExpr(Ir *ir, NodeDataUnaryExpr unary_expr)
                 assume(false);
         }
 
-        inst.dst = Ir_newTemp(ir);
+        inst.dst = Ir_newTemp(ir, inner_type);
         inst.data.unary.lhs = inner;
         inner = Ir_appendInst(ir, inst);
     }
@@ -622,13 +668,15 @@ static IrTempId Ir_lowerUnaryExpr(Ir *ir, NodeDataUnaryExpr unary_expr)
 
 static IrTempId Ir_lowerBinaryExpr(Ir *ir, NodeDataBinaryExpr binary_expr)
 {
+    IrTempId lhs = Ir_lowerExpr(ir, binary_expr.lhs);
+    IrTempId rhs = Ir_lowerExpr(ir, binary_expr.rhs);
+    IrTempId resolved = Sema_peerResolveType(ir->ctx, Ir_getTempType(ir, lhs), Ir_getTempType(ir, rhs));
     IrInst inst = {
         .op = IrOp_FromBinOp(binary_expr.op),
-        .dst = Ir_newTemp(ir),
-        .ty = 0,
+        .dst = Ir_newTemp(ir, resolved),
         .data = { .binary = {
-            .lhs = Ir_lowerExpr(ir, binary_expr.lhs),
-            .rhs = Ir_lowerExpr(ir, binary_expr.rhs),
+            .lhs = lhs,
+            .rhs = rhs,
         } },
     };
 
@@ -657,43 +705,61 @@ static IrTempId Ir_lowerExpr(Ir *ir, Node *expr)
     }
 }
 
-static IrVarId Ir_InternVar(Ir *ir, Buffer name)
+static IrVarId Ir_findVar(Ir *ir, sInternId id)
 {
-    sInternId id = CompileContext_putString(ir->ctx, name);
     for (uint32_t i = 0; i < ir->func->vars.len; i++) {
         sInternId a = ir->func->vars.data[i].name;
         if (a == id) return i;
     }
-
-    return Ir_appendVar(ir, (IrVar){ .name = id, .type = 0 });
+    return ir_invalid_id;
+}
+static IrVarId Ir_putVar(Ir *ir, IrVar var)
+{
+    IrVarId id = Ir_findVar(ir, var.name);
+    if (id == ir_invalid_id) id = Ir_appendVar(ir, var);
+    return id;
+}
+static IrVar Ir_getVar(Ir *ir, IrVarId id)
+{
+    return ir->func->vars.data[id];
 }
 
 static tInternId Sema_evalTypeName(CompileContext *ctx, Node *n);
 static void Ir_lowerAssignExpr(Ir *ir, NodeDataSingleAssignExpr e)
 {
     Buffer name = Sema_evalSymbolName(ir->ctx, e.lhs);
-    IrVarId id = Ir_InternVar(ir, name);
+    bool is_discard = Buffer_eql(name, "_");
+
+    IrVarId var_id = ir_invalid_id;
+    if (!is_discard) {
+        var_id = Ir_findVar(ir, CompileContext_putString(ir->ctx, name));
+        if (var_id == ir_invalid_id) {
+            std_panic("failed to find symbol: "PRIb"\n", Buffer(name));
+        }
+    }
 
     switch (e.assign_op) {
         case token_equal:
         {
             IrTempId expr = Ir_lowerExpr(ir, e.rhs);
-            Ir_emitStoreVar(ir, id, expr);
+            if (!is_discard) {
+                Ir_emitStoreVar(ir, var_id, expr);
+            }
         }
         break;
 
         case token_plus_equal:
         {
-            IrTempId dst = Ir_newTemp(ir);
-            IrTempId lhs = Ir_emitLoadVar(ir, id);
             IrTempId rhs = Ir_lowerExpr(ir, e.rhs);
-            IrInst add = {
-                .op = ir_op_add,
-                .dst = dst,
-                .ty = 0,
-                .data = { .binary = { .lhs = lhs, .rhs = rhs } },
-            };
-            Ir_emitStoreVar(ir, id, Ir_appendInst(ir, add));
+            if (!is_discard) {
+                IrTempId lhs = Ir_emitLoadVar(ir, var_id);
+                IrInst add = {
+                    .op = ir_op_add,
+                    .dst = Ir_newTemp(ir, var_id),
+                    .data = { .binary = { .lhs = lhs, .rhs = rhs } },
+                };
+                Ir_emitStoreVar(ir, var_id, Ir_appendInst(ir, add));
+            }
         }
         break;
 
@@ -766,15 +832,19 @@ static void Ir_lowerLoop(Ir *ir, NodeDataLoopStatement loop)
                 NodeDataForItem for_item = for_args.args[i]->data.for_item;
                 assume(for_item.is_range);
 
+                tInternId usize = Ir_primitiveType(ir, ty_usize);
+
                 if (i < payloads.payloads_len) {
-                    IrVarId id = Ir_InternVar(ir, payloads.payloads[i]->data.payload.name);
+                    IrVarId id = Ir_putVar(ir, (IrVar){
+                        .name = CompileContext_putString(ir->ctx, payloads.payloads[i]->data.payload.name),
+                        .type = usize,
+                    });
                     Ir_emitStoreVar(ir, id, Ir_lowerExpr(ir, for_item.for_start));
 
                     Ir_setBlock(ir, block_cond);
                     IrInst cond_inst = {
                         .op = ir_op_lt,
-                        .ty = 0,
-                        .dst = Ir_newTemp(ir),
+                        .dst = Ir_newTemp(ir, Ir_primitiveType(ir, ty_c_int)),
                         .data = { .binary = { .lhs = Ir_emitLoadVar(ir, id), .rhs = Ir_lowerExpr(ir, for_item.for_end) } },
                     };
                     IrTempId cond = Ir_appendInst(ir, cond_inst);
@@ -785,19 +855,16 @@ static void Ir_lowerLoop(Ir *ir, NodeDataLoopStatement loop)
                     Ir_termJmp(ir, cont_expr);
 
                     Ir_setBlock(ir, cont_expr);
-                    IrTempId dst = Ir_newTemp(ir);
                     IrTempId lhs = Ir_emitLoadVar(ir, id);
                     IrInst one = {
                         .op = ir_op_const_num,
-                        .dst = Ir_newTemp(ir),
-                        .ty = 0,
+                        .dst = Ir_newTemp(ir, usize),
                         .data = { .i64 = 1 },
                     };
                     IrTempId rhs = Ir_appendInst(ir, one);
                     IrInst add = {
                         .op = ir_op_add,
-                        .dst = dst,
-                        .ty = 0,
+                        .dst = Ir_newTemp(ir, usize),
                         .data = { .binary = { .lhs = lhs, .rhs = rhs } },
                     };
                     Ir_emitStoreVar(ir, id, Ir_appendInst(ir, add));
@@ -953,6 +1020,8 @@ static IrFunc* Ir_lowerFunc(Ir *ir, NodeDataDeclFn fn, bool is_static)
             IrNamedType arg = ir->func->call_args.data[i];
             IrVar var = { .name = arg.name, .type = arg.type };
             IrVarId var_id = Ir_appendVar(ir, var);
+            // TODO: add ir_op_var_decl for call_args and omit load. Then, refer to vars by name instead
+            // of internal id.
             IrInst inst = {
                 .op = ir_op_load_arg,
                 .dst = ir_invalid_id,
