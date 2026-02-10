@@ -4,7 +4,7 @@
 // - string interner
 // - type interner/registry
 
-typedef struct CompileContext CompileContext;
+typedef struct Ctx Ctx;
 
 // String Interner.
 //
@@ -288,13 +288,13 @@ typedef struct {
     tInternEntryArray entries;
 } tIntern;
 
-struct CompileContext {
+struct Ctx {
     sIntern strings;
     tIntern types;
 };
 
 // fnv-1a
-static uint64_t CompileContext_hashString(Buffer b)
+static uint64_t Ctx_hashString(Buffer b)
 {
     uint64_t h = 1469598103934665603ull;
     for (uint32_t i = 0; i < b.len; i++) {
@@ -304,9 +304,9 @@ static uint64_t CompileContext_hashString(Buffer b)
     return h;
 }
 
-static sInternId CompileContext_putString(CompileContext *ctx, Buffer buffer)
+static sInternId Ctx_putString(Ctx *ctx, Buffer buffer)
 {
-    uint64_t hash = CompileContext_hashString(buffer);
+    uint64_t hash = Ctx_hashString(buffer);
     for (uint32_t i = 0 ; i < ctx->strings.entries.len; i++) {
         sInternEntry e = ctx->strings.entries.data[i];
         if (e.hash != hash) continue;
@@ -317,12 +317,15 @@ static sInternId CompileContext_putString(CompileContext *ctx, Buffer buffer)
     return (sInternId)sInternEntryArray_append(&ctx->strings.entries, en);
 }
 
-static Buffer CompileContext_getString(CompileContext *ctx, sInternId id)
+// e.g. printf("buffer: "PRIb, Ctx_Buffer(r->ctx, id))
+#define Ctx_Buffer(ctx, id) Buffer(Ctx_getString(ctx, (id)))
+
+static Buffer Ctx_getString(Ctx *ctx, sInternId id)
 {
     return ctx->strings.entries.data[id].buffer;
 }
 
-static uint64_t CompileContext_hashType(tType ty)
+static uint64_t Ctx_hashType(tType ty)
 {
     uint64_t hash = ty.tag;
     switch (ty.tag) {
@@ -374,9 +377,9 @@ static uint64_t CompileContext_hashType(tType ty)
     return hash;
 }
 
-static tInternId CompileContext_putType(CompileContext *ctx, tType ty)
+static tInternId Ctx_putType(Ctx *ctx, tType ty)
 {
-    uint64_t hash = CompileContext_hashType(ty);
+    uint64_t hash = Ctx_hashType(ty);
     for (uint32_t i = 0 ; i < ctx->types.entries.len; i++) {
         tInternEntry e = ctx->types.entries.data[i];
         if (e.hash != hash) continue;
@@ -387,17 +390,17 @@ static tInternId CompileContext_putType(CompileContext *ctx, tType ty)
     return (tInternId)tInternEntryArray_append(&ctx->types.entries, en);
 }
 
-static tType CompileContext_getType(CompileContext *ctx, tInternId id)
+static tType Ctx_getType(Ctx *ctx, tInternId id)
 {
     return ctx->types.entries.data[id].ty;
 }
 
 // Compile context.
 
-static void CompileContext_init(CompileContext *ctx)
+static void Ctx_init(Ctx *ctx)
 {
     sInternEntryArray_init(&ctx->strings.entries);
-    CompileContext_putString(ctx, Buffer_empty()); // reserve empty buffer as id 0
+    Ctx_putString(ctx, Buffer_empty()); // reserve empty buffer as id 0
 
     tInternEntryArray_init(&ctx->types.entries);
 }

@@ -445,7 +445,7 @@ static int Tokenizer_getKeyword(Buffer b)
 }
 
 
-static void Tokenizer_init(Tokenizer *t, CompileContext *ctx, Buffer source)
+static void Tokenizer_init(Tokenizer *t, Ctx *ctx, Buffer source)
 {
     (void)ctx;
 

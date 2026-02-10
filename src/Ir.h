@@ -46,8 +46,6 @@ typedef enum {
     ir_op_const_char,
     // bytes
     ir_op_const_bytes,
-    // arg
-    ir_op_load_arg, // TODO: if we used actual names instead of id's may not need
     // tmp
     ir_op_copy,
     // var
@@ -86,7 +84,6 @@ static bool IrOp_hasDst(IrOp op)
     switch (op) {
         case ir_op_copy:
         case ir_op_store_var:
-        case ir_op_load_arg:
         case ir_op_unreachable:
             return false;
         default:
@@ -105,8 +102,6 @@ static const char* IrOp_name(IrOp op)
             return "load_bytes";
         case ir_op_const_char:
             return "load_char";
-        case ir_op_load_arg:
-            return "load_arg";
         case ir_op_copy:
             return "copy";
         case ir_op_load_var:
@@ -211,7 +206,6 @@ typedef union {
     struct { IrTempId lhs; IrTempId rhs; } binary;
     struct { IrTempId lhs; } unary;
     struct { IrVarId id; IrTempId value; } var;
-    struct { IrVarId id; sInternId name; } arg;
     sInternId bytes;
     int64_t i64;
 } IrOpData;
@@ -256,6 +250,7 @@ void IrBlock_init(IrBlock *block)
 typedef struct {
     sInternId name;
     tInternId type;
+    sInternId init_name;
 } IrVar;
 
 DEFINE_ARRAY(IrNamedType);
@@ -285,10 +280,10 @@ DEFINE_ARRAY_NAMED(IrFunc*, IrFunc);
 
 typedef struct {
     IrFuncArray funcs;
-    CompileContext *ctx;
+    Ctx *ctx;
 } IrProgram;
 
-void IrProgram_init(IrProgram *p, CompileContext *ctx)
+void IrProgram_init(IrProgram *p, Ctx *ctx)
 {
     p->ctx = ctx;
     IrFuncArray_init(&p->funcs);
@@ -301,7 +296,7 @@ typedef struct {
     IrFunc *func;   // active func
     IrBlock *block; // active block
 
-    CompileContext *ctx;
+    Ctx *ctx;
     // stack for current control flow we are in (e.g. loop)
 } Ir;
 
@@ -372,7 +367,7 @@ static void Ir_termBr(Ir *ir, IrTempId cond, IrBlockId t, IrBlockId f)
     Ir_terminateBlock(ir, term);
 }
 
-static void Ir_init(Ir *ir, CompileContext *ctx)
+static void Ir_init(Ir *ir, Ctx *ctx)
 {
     IrProgram_init(&ir->p, ctx);
     ir->ctx = ctx;
@@ -396,7 +391,7 @@ static IrVarId Ir_appendVar(Ir *ir, IrVar var)
 
 static tInternId Ir_primitiveType(Ir *ir, tTypeTag tag)
 {
-    return CompileContext_putType(ir->ctx, (tType){ .tag = tag });
+    return Ctx_putType(ir->ctx, (tType){ .tag = tag });
 }
 
 static void Ir_emitStoreVar(Ir *ir, IrVarId var_id, IrTempId tmp_id)
@@ -441,8 +436,9 @@ static IrTempId Ir_lowerPrimaryTypeExpr(Ir *ir, NodeDataPrimaryTypeExpr primary_
         {
             // Should use GetVar as it should exist, need a symbol table
             IrVarId rval = Ir_putVar(ir, (IrVar){
-                .name = CompileContext_putString(ir->ctx, primary_type_expr.data.raw),
+                .name = Ctx_putString(ir->ctx, primary_type_expr.data.raw),
                 .type = Ir_primitiveType(ir, ty_c_int),
+                .init_name = ir_invalid_id,
             });
             return Ir_emitLoadVar(ir, rval);
         }
@@ -457,7 +453,7 @@ static IrTempId Ir_lowerPrimaryTypeExpr(Ir *ir, NodeDataPrimaryTypeExpr primary_
 
         case node_primary_type_string_literal:
         {
-            tInternId const_ptr_c_char = CompileContext_putType(ir->ctx, (tType){
+            tInternId const_ptr_c_char = Ctx_putType(ir->ctx, (tType){
                 .tag = ty_ptr_one,
                 .data = {
                     .ptr = { .child = Ir_primitiveType(ir, ty_c_char), .modifiers = pointer_modifier_const },
@@ -467,7 +463,7 @@ static IrTempId Ir_lowerPrimaryTypeExpr(Ir *ir, NodeDataPrimaryTypeExpr primary_
                 .op = ir_op_const_bytes,
                 .dst = Ir_newTemp(ir, const_ptr_c_char),
                 // TODO: Ensure string is also stored in const table
-                .data = { .bytes = CompileContext_putString(ir->ctx, primary_type_expr.data.raw) },
+                .data = { .bytes = Ctx_putString(ir->ctx, primary_type_expr.data.raw) },
             });
         }
         break;
@@ -518,7 +514,7 @@ static IrTempId Ir_lowerTypeExpr(Ir *ir, NodeDataTypeExpr expr)
                 // assumes this is a base type
                 IrValue value = {
                     .tag = ir_val_sym,
-                    .data = { .sym = CompileContext_putString(ir->ctx, suffix_expr.expr->data.primary_type_expr.data.raw) },
+                    .data = { .sym = Ctx_putString(ir->ctx, suffix_expr.expr->data.primary_type_expr.data.raw) },
                 };
 
                 if (s->data.fn_call_arguments.exprs_len > 16) {
@@ -724,7 +720,7 @@ static IrVar Ir_getVar(Ir *ir, IrVarId id)
     return ir->func->vars.data[id];
 }
 
-static tInternId Sema_evalTypeName(CompileContext *ctx, Node *n);
+static tInternId Sema_evalTypeName(Ctx *ctx, Node *n);
 static void Ir_lowerAssignExpr(Ir *ir, NodeDataSingleAssignExpr e)
 {
     Buffer name = Sema_evalSymbolName(ir->ctx, e.lhs);
@@ -732,7 +728,7 @@ static void Ir_lowerAssignExpr(Ir *ir, NodeDataSingleAssignExpr e)
 
     IrVarId var_id = ir_invalid_id;
     if (!is_discard) {
-        var_id = Ir_findVar(ir, CompileContext_putString(ir->ctx, name));
+        var_id = Ir_findVar(ir, Ctx_putString(ir->ctx, name));
         if (var_id == ir_invalid_id) {
             std_panic("failed to find symbol: "PRIb"\n", Buffer(name));
         }
@@ -774,8 +770,9 @@ static void Ir_lowerVarDecl(Ir *ir, NodeDataVarDeclStatement vd)
     assume(vd.var_decl_additional_len == 0);
 
     IrVar var = {
-        .name = CompileContext_putString(ir->ctx, vd.var_decl->data.var_decl_proto.name),
+        .name = Ctx_putString(ir->ctx, vd.var_decl->data.var_decl_proto.name),
         .type = Sema_evalTypeName(ir->ctx, vd.var_decl->data.var_decl_proto.type),
+        .init_name = ir_invalid_id,
     };
     IrVarId id = Ir_appendVar(ir, var);
 
@@ -836,8 +833,9 @@ static void Ir_lowerLoop(Ir *ir, NodeDataLoopStatement loop)
 
                 if (i < payloads.payloads_len) {
                     IrVarId id = Ir_putVar(ir, (IrVar){
-                        .name = CompileContext_putString(ir->ctx, payloads.payloads[i]->data.payload.name),
+                        .name = Ctx_putString(ir->ctx, payloads.payloads[i]->data.payload.name),
                         .type = usize,
+                        .init_name = ir_invalid_id,
                     });
                     Ir_emitStoreVar(ir, id, Ir_lowerExpr(ir, for_item.for_start));
 
@@ -990,7 +988,7 @@ static IrFunc* Ir_lowerFunc(Ir *ir, NodeDataDeclFn fn, bool is_static)
     ir->func = func;
     ir->func->is_static = is_static;
     ir->func->modifiers = fn.modifiers;
-    ir->func->name = CompileContext_putString(ir->ctx, fn_proto.name);
+    ir->func->name = Ctx_putString(ir->ctx, fn_proto.name);
     ir->func->ret_ty = Sema_evalTypeName(ir->ctx, fn_proto.return_type);
     if (fn_proto.params) {
         assume(fn_proto.params->tag == node_param_decl_list);
@@ -1003,7 +1001,7 @@ static IrFunc* Ir_lowerFunc(Ir *ir, NodeDataDeclFn fn, bool is_static)
             if (decl.is_varargs) {
                 ty.is_varargs = true;
             } else {
-                ty.name = CompileContext_putString(ir->ctx, decl.identifier);
+                ty.name = Ctx_putString(ir->ctx, decl.identifier);
                 ty.type = Sema_evalTypeName(ir->ctx, decl.type);
                 ty.is_varargs = false;
             }
@@ -1018,16 +1016,11 @@ static IrFunc* Ir_lowerFunc(Ir *ir, NodeDataDeclFn fn, bool is_static)
 
         for (uint32_t i = 0; i < ir->func->call_args.len; i++) {
             IrNamedType arg = ir->func->call_args.data[i];
-            IrVar var = { .name = arg.name, .type = arg.type };
-            IrVarId var_id = Ir_appendVar(ir, var);
-            // TODO: add ir_op_var_decl for call_args and omit load. Then, refer to vars by name instead
-            // of internal id.
-            IrInst inst = {
-                .op = ir_op_load_arg,
-                .dst = ir_invalid_id,
-                .data = { .arg = { .id = var_id, .name = arg.name } },
-            };
-            Ir_appendInst(ir, inst);
+            Ir_appendVar(ir, (IrVar){
+                .name = arg.name,
+                .type = arg.type,
+                .init_name = arg.name,
+            });
         }
 
         Ir_lowerBlock(ir, fn.block->data.block);

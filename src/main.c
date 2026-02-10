@@ -1,18 +1,15 @@
 #include "os.h"
+#include "core.h"
 
-#include "Array.h"
-#include "Buffer.h"
-#include "CompileContext.h"
-
+#include "Ctx.h"
 #include "Tokenizer.h"
-#include "ParserNode.h"
 #include "Parser.h"
 #include "Sema.h"
 #include "Ir.h"
 #include "CodeGen.h"
 
-#include "AstRenderer.h"
-#include "IrRenderer.h"
+#include "DebugAst.h"
+#include "DebugIr.h"
 
 bool strequal(const char *a, const char *b)
 {
@@ -66,8 +63,8 @@ int main(int argc, char **argv)
     if (!no_emit_bin && !lib_dir) std_panic("-lib <zig_lib_dir> is required\n");
     if (!no_emit_bin && !out_filename) std_panic("-o <file> is required\n"); // just append .c to input file
 
-    CompileContext ctx;
-    CompileContext_init(&ctx);
+    Ctx ctx;
+    Ctx_init(&ctx);
 
     TokenArray tokens;
     TokenArray_init(&tokens);
@@ -92,9 +89,9 @@ int main(int argc, char **argv)
     Node *root = Parser_parse(&p);
 
     if (emit_ast) {
-        AstRenderer r;
-        AstRenderer_init(&r, &p);
-        AstRenderer_render(&r, root);
+        DebugAst r;
+        DebugAst_init(&r, &p);
+        DebugAst_render(&r, root);
         return 0;
     }
 
@@ -103,9 +100,9 @@ int main(int argc, char **argv)
     IrProgram *ir_p = Ir_lower(&ir, root);
 
     if (emit_ir) {
-        IrRenderer r;
-        IrRenderer_init(&r, &ctx);
-        IrRenderer_render(&r, ir_p);
+        DebugIr r;
+        DebugIr_init(&r, &ctx);
+        DebugIr_render(&r, ir_p);
         return 0;
     }
 

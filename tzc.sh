@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -Eeuo pipefail
+set -eu
 
 [ "$#" -eq 2 ] || { echo "usage: $0 <input> <zig_lib_dir>" >&2; exit 1; }
 

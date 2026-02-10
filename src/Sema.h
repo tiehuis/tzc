@@ -1,4 +1,4 @@
-static tInternId Sema_resolveBuiltinTypeId(CompileContext *ctx, Buffer b)
+static tInternId Sema_resolveBuiltinTypeId(Ctx *ctx, Buffer b)
 {
     typedef struct {
         tTypeTag tag;
@@ -42,14 +42,14 @@ static tInternId Sema_resolveBuiltinTypeId(CompileContext *ctx, Buffer b)
 
     for (uint32_t i = 0; i < sizeof(mappings)/sizeof(*mappings); i++) {
         if (Buffer_eql(b, mappings[i].name)) {
-            return CompileContext_putType(ctx, (tType){ .tag = mappings[i].tag });
+            return Ctx_putType(ctx, (tType){ .tag = mappings[i].tag });
         }
     }
 
     return ty_invalid_id;
 }
 
-static Buffer Sema_evalSymbolName(CompileContext *ctx, Node *n)
+static Buffer Sema_evalSymbolName(Ctx *ctx, Node *n)
 {
     switch (n->tag) {
         case node_type_expr:
@@ -74,7 +74,7 @@ static Buffer Sema_evalSymbolName(CompileContext *ctx, Node *n)
 }
 
 // Given a Node*, returns a tTypeId.
-static tInternId Sema_evalTypeName(CompileContext *ctx, Node *n)
+static tInternId Sema_evalTypeName(Ctx *ctx, Node *n)
 {
     switch (n->tag) {
         case node_type_expr:
@@ -105,7 +105,7 @@ static tInternId Sema_evalTypeName(CompileContext *ctx, Node *n)
                                 break;
                         }
 
-                        return CompileContext_putType(ctx, ty);
+                        return Ctx_putType(ctx, ty);
                     }
 
                     default:
@@ -142,11 +142,11 @@ static tInternId Sema_evalTypeName(CompileContext *ctx, Node *n)
             std_panic("unsupported tag: %s\n", NodeTag_name(n->tag));
     }
 }
-static tInternId Sema_peerResolveType(CompileContext *ctx, tInternId a_id, tInternId b_id)
+static tInternId Sema_peerResolveType(Ctx *ctx, tInternId a_id, tInternId b_id)
 {
     if (a_id == b_id) return a_id;
-    tType a = CompileContext_getType(ctx, a_id);
-    tType b = CompileContext_getType(ctx, b_id);
+    tType a = Ctx_getType(ctx, a_id);
+    tType b = Ctx_getType(ctx, b_id);
     tTypeInfo a_info = tType_info(a);
     tTypeInfo b_info = tType_info(b);
 

@@ -22,7 +22,8 @@ void* std_malloc(size_t);
 char* std_readFile(const char *filename, long *fsize);
 void* std_createFile(const char *filename);
 size_t std_writeFile(void *ptr, size_t size, size_t nitems, void *fh);
-// generic implementation in os.c
+
+// generic implementations in os.c
 void* std_memcpy(void *to, const void *from, size_t bytes);
 size_t std_strlen(const char *s);
 void _Noreturn std_panic(const char *fmt, ...);
